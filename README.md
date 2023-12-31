@@ -56,3 +56,9 @@ repository.
   - `num_params`: Initialize this field to the number of parameters that the function
     had after the limit functions pass but before the select instructions pass.
   
+
+## x86 VM on Mac
+
+```
+docker run -it --rm --platform linux/amd64 -v $PWD:/eoc gcc bash
+```

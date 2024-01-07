@@ -1,14 +1,10 @@
 import ast
-from ast import *
-from enum import EnumCheck
-from utils import *
+from typing import Sequence, Tuple
+
 import utils
 import x86_ast
-from x86_ast import *
-import os
-from typing import List, Sequence, Tuple, Set, Dict
 
-Binding = Tuple[Name, expr]
+Binding = Tuple[ast.Name, ast.expr]
 Temporaries = Sequence[Binding]
 
 
@@ -99,33 +95,33 @@ class Compiler:
 
     def select_stmt(self, s: ast.stmt) -> Sequence[x86_ast.instr]:
         match s:
-            case ast.Expr(ast.Call(ast.Name('print'), [atm])):
+            case ast.Expr(ast.Call(ast.Name("print"), [atm])):
                 arg = self.select_arg(atm)
                 return [
-                    x86_ast.Instr('movq', [arg, x86_ast.Reg('rdi')]),
-                    x86_ast.Callq(utils.label_name('print_int'), 1)
+                    x86_ast.Instr("movq", [arg, x86_ast.Reg("rdi")]),
+                    x86_ast.Callq(utils.label_name("print_int"), 1),
                 ]
             case ast.Assign([var], exp):
                 arg = self.select_arg(var)
                 match exp:
                     case ast.Constant(_) | ast.Name(_):
-                        return [x86_ast.Instr('movq', [self.select_arg(exp), arg])]
-                    case ast.Call(ast.Name('input_int'), []):
+                        return [x86_ast.Instr("movq", [self.select_arg(exp), arg])]
+                    case ast.Call(ast.Name("input_int"), []):
                         return [
-                            x86_ast.Callq(utils.label_name('read_int'), 0),
-                            x86_ast.Instr('movq', [x86_ast.Reg('rax'), arg]),
+                            x86_ast.Callq(utils.label_name("read_int"), 0),
+                            x86_ast.Instr("movq", [x86_ast.Reg("rax"), arg]),
                         ]
                     case ast.UnaryOp(ast.USub(), atm):
                         return [
-                            x86_ast.Instr('movq', [self.select_arg(atm), arg]),
-                            x86_ast.Instr('negq', [arg]),
+                            x86_ast.Instr("movq", [self.select_arg(atm), arg]),
+                            x86_ast.Instr("negq", [arg]),
                         ]
                     case ast.BinOp(atm1, op, atm2):
                         return [
-                            x86_ast.Instr('movq', [self.select_arg(atm1), arg]),
+                            x86_ast.Instr("movq", [self.select_arg(atm1), arg]),
                             x86_ast.Instr(
-                                'addq' if isinstance(op, ast.Add) else 'subq',
-                                [self.select_arg(atm2), arg]
+                                "addq" if isinstance(op, ast.Add) else "subq",
+                                [self.select_arg(atm2), arg],
                             ),
                         ]
         raise Exception()
@@ -141,15 +137,15 @@ class Compiler:
     # Assign Homes
     ############################################################################
 
-    #def assign_homes_arg(self, a: arg, home: Dict[Variable, arg]) -> arg:
+    # def assign_homes_arg(self, a: arg, home: Dict[Variable, arg]) -> arg:
     #    # YOUR CODE HERE
     #    pass
 
-    #def assign_homes_instr(self, i: instr, home: Dict[Variable, arg]) -> instr:
+    # def assign_homes_instr(self, i: instr, home: Dict[Variable, arg]) -> instr:
     #    # YOUR CODE HERE
     #    pass
 
-    #def assign_homes(self, p: X86Program) -> X86Program:
+    # def assign_homes(self, p: X86Program) -> X86Program:
     #    # YOUR CODE HERE
     #    pass
 
@@ -157,11 +153,11 @@ class Compiler:
     ## Patch Instructions
     #############################################################################
 
-    #def patch_instr(self, i: instr) -> List[instr]:
+    # def patch_instr(self, i: instr) -> List[instr]:
     #    # YOUR CODE HERE
     #    pass
 
-    #def patch_instructions(self, p: X86Program) -> X86Program:
+    # def patch_instructions(self, p: X86Program) -> X86Program:
     #    # YOUR CODE HERE
     #    pass
 
@@ -169,6 +165,6 @@ class Compiler:
     ## Prelude & Conclusion
     #############################################################################
 
-    #def prelude_and_conclusion(self, p: X86Program) -> X86Program:
+    # def prelude_and_conclusion(self, p: X86Program) -> X86Program:
     #    # YOUR CODE HERE
     #    pass

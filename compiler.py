@@ -137,17 +137,46 @@ class Compiler:
     # Assign Homes
     ############################################################################
 
-    # def assign_homes_arg(self, a: arg, home: Dict[Variable, arg]) -> arg:
-    #    # YOUR CODE HERE
-    #    pass
+    def assign_homes_arg(
+        self, a: x86_ast.arg, home: dict[x86_ast.Variable, x86_ast.arg]
+    ) -> x86_ast.arg:
+        match a:
+            case x86_ast.Variable(_):
+                if a not in home:
+                    var_count = len(home)
+                    home[a] = x86_ast.Deref("rbp", -8 * (var_count + 1))
 
-    # def assign_homes_instr(self, i: instr, home: Dict[Variable, arg]) -> instr:
-    #    # YOUR CODE HERE
-    #    pass
+                return home[a]
+            case _:
+                return a
 
-    # def assign_homes(self, p: X86Program) -> X86Program:
-    #    # YOUR CODE HERE
-    #    pass
+    def assign_homes_instr(
+        self, i: x86_ast.instr, home: dict[x86_ast.Variable, x86_ast.arg]
+    ) -> x86_ast.instr:
+        match i:
+            case x86_ast.Instr(op, [arg_0, arg_1]):
+                arg_0 = self.assign_homes_arg(arg_0, home)
+                arg_1 = self.assign_homes_arg(arg_1, home)
+                return x86_ast.Instr(op, [arg_0, arg_1])
+
+            case x86_ast.Instr(op, [arg_0]):
+                arg_1 = self.assign_homes_arg(arg_0, home)
+                return x86_ast.Instr(op, [arg_0, arg_1])
+
+            case _:
+                raise Exception(f"invalid instruction: {i}")
+
+    def assign_homes(self, p: x86_ast.X86Program) -> x86_ast.X86Program:
+        homes = {}
+        body: list[x86_ast.instr] = []
+        for instr in p.body:
+            match instr:
+                case x86_ast.Instr():
+                    body.append(self.assign_homes_instr(instr, homes))
+                case _:
+                    body.append(instr)  # type: ignore
+
+        return x86_ast.X86Program(body=body)
 
     #############################################################################
     ## Patch Instructions

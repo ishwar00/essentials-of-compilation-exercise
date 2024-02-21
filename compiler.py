@@ -213,6 +213,13 @@ class Compiler:
     ## Prelude & Conclusion
     #############################################################################
 
-    # def prelude_and_conclusion(self, p: X86Program) -> X86Program:
-    #    # YOUR CODE HERE
-    #    pass
+    def prelude_and_conclusion(self, p: x86_ast.X86Program) -> x86_ast.X86Program:
+        body = [
+            x86_ast.Instr("pushq", [x86_ast.Reg("rbp")]),
+            x86_ast.Instr("movq", [x86_ast.Reg("rsp"), x86_ast.Reg("rbp")]),
+            *p.body,
+            x86_ast.Instr("popq", [x86_ast.Reg("rbp")]),
+            x86_ast.Instr("retq", []),
+        ]
+
+        return x86_ast.X86Program(body=body)

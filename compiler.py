@@ -182,13 +182,32 @@ class Compiler:
     ## Patch Instructions
     #############################################################################
 
-    # def patch_instr(self, i: instr) -> List[instr]:
-    #    # YOUR CODE HERE
-    #    pass
+    def patch_instr(self, i: x86_ast.instr) -> list[x86_ast.instr]:
+        match i:
+            case x86_ast.Instr(
+                instr,
+                [
+                    x86_ast.Deref() as arg_0,
+                    x86_ast.Deref() as arg_1,
+                ],
+            ):
+                return [
+                    x86_ast.Instr("movq", [arg_0, x86_ast.Reg("rax")]),
+                    x86_ast.Instr(instr, [x86_ast.Reg("rax"), arg_1]),
+                ]
+            case _:
+                return [i]
 
-    # def patch_instructions(self, p: X86Program) -> X86Program:
-    #    # YOUR CODE HERE
-    #    pass
+    def patch_instructions(self, p: x86_ast.X86Program) -> x86_ast.X86Program:
+        body = []
+        for instr in p.body:
+            match instr:
+                case x86_ast.Instr(_, [_, _]):
+                    body.extend(self.patch_instr(instr))
+                case _:
+                    body.append(instr)
+
+        return x86_ast.X86Program(body=body)
 
     #############################################################################
     ## Prelude & Conclusion

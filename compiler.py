@@ -176,6 +176,13 @@ class Compiler:
                 case _:
                     body.append(instr)  # type: ignore
 
+        frame_size = len(homes) if len(homes) % 2 == 0 else len(homes) + 1
+        body = [
+            x86_ast.Instr('subq', [x86_ast.Immediate(frame_size * 8), x86_ast.Reg('rsp')]),
+            *body,
+            x86_ast.Instr('addq', [x86_ast.Immediate(frame_size * 8), x86_ast.Reg('rsp')]),
+        ]
+
         return x86_ast.X86Program(body=body)
 
     #############################################################################

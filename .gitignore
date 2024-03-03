@@ -1,2 +1,6 @@
 **/__pycache__/
 /runtime.o
+/tests/**/*.s
+/tests/**/*.out
+a.out
+scratch.md

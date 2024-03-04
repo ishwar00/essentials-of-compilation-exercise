@@ -108,23 +108,92 @@ class Compiler(compiler.Compiler):
     ############################################################################
 
     # # Returns the coloring and the set of spilled variables.
-    # def color_graph(self, graph: UndirectedAdjList,
-    #                 variables: Set[location]) -> Tuple[Dict[location, int], Set[location]]:
-    #     # YOUR CODE HERE
-    #     pass
+    def color_graph(
+        self, graph: UndirectedAdjList, variables: set[x86_ast.Variable]
+    ) -> dict[x86_ast.Variable, int]:
+        reg_allocation: dict[x86_ast.Variable, int] = {}
+        # TODO: use priority queue
+        saturation_set: dict[x86_ast.Variable, set[int]] = {
+            variable: set() for variable in variables
+        }
+        while len(variables) > 0:
+            max_saturation = max(len(value) for value in saturation_set.values())
+            most_sat_var = [
+                key
+                for key, value in saturation_set.items()
+                if len(value) == max_saturation
+            ][0]
+            reg_allocation[most_sat_var] = len(saturation_set[most_sat_var])
 
-    # def allocate_registers(self, p: X86Program,
-    #                        graph: UndirectedAdjList) -> X86Program:
-    #     # YOUR CODE HERE
-    #     pass
+            for edge in graph.out_edges(most_sat_var):
+                if edge.target in saturation_set:
+                    saturation_set[edge.target].add(reg_allocation[most_sat_var])
+
+            saturation_set.pop(most_sat_var)
+            variables.remove(most_sat_var)
+
+        return reg_allocation
+
+    def allocate_registers(
+        self, graph: UndirectedAdjList
+    ) -> tuple[dict[x86_ast.Variable, x86_ast.Deref | x86_ast.Reg], int]:
+        variables: set[x86_ast.Variable] = {
+            vertex
+            for vertex in graph.vertices()
+            if isinstance(vertex, x86_ast.Variable)
+        }
+        color_allocation = self.color_graph(graph, variables)
+        registers = {
+            0: x86_ast.Reg("rcx"),
+            1: x86_ast.Reg("rdx"),
+            2: x86_ast.Reg("rsi"),
+            3: x86_ast.Reg("rdi"),
+            4: x86_ast.Reg("r8"),
+            5: x86_ast.Reg("r9"),
+            6: x86_ast.Reg("r10"),
+            7: x86_ast.Reg("rbx"),
+            8: x86_ast.Reg("r12"),
+            9: x86_ast.Reg("r13"),
+            10: x86_ast.Reg("r14"),
+        }
+
+        reg_allocation: dict[x86_ast.Variable, x86_ast.Deref | x86_ast.Reg] = {}
+        spilled_count: int = 0
+        for loc, color in color_allocation.items():
+            if color in registers:
+                reg_allocation[loc] = registers[color]
+            else:
+                offset = color - len(registers)
+                reg_allocation[loc] = x86_ast.Deref("rbp", -8 * offset)
+                spilled_count = max(offset, spilled_count)
+
+        return reg_allocation, spilled_count
 
     ############################################################################
     # Assign Homes
     ############################################################################
 
-    # def assign_homes(self, pseudo_x86: X86Program) -> X86Program:
-    #     # YOUR CODE HERE
-    #     pass
+    def assign_homes(self, p: x86_ast.X86Program) -> x86_ast.X86Program:
+        live_after_set = self.uncover_live(p)
+        graph = self.build_interference(p, live_after_set)
+        reg_allocation, spilled_count = self.allocate_registers(graph)
+
+        body: list[x86_ast.instr] = []
+        for instr in p.body:
+            match instr:
+                case x86_ast.Instr():
+                    body.append(self.assign_homes_instr(instr, reg_allocation))
+                case _:
+                    body.append(instr)  # type: ignore
+
+        frame_size = spilled_count if spilled_count % 2 == 0 else spilled_count + 1
+        body = [
+            x86_ast.Instr('subq', [x86_ast.Immediate(frame_size * 8), x86_ast.Reg('rsp')]),
+            *body,
+            x86_ast.Instr('addq', [x86_ast.Immediate(frame_size * 8), x86_ast.Reg('rsp')]),
+        ]
+
+        return x86_ast.X86Program(body=body)
 
     ###########################################################################
     # Patch Instructions

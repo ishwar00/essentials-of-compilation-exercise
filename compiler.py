@@ -1,5 +1,5 @@
 import ast
-from typing import Sequence, Tuple
+from typing import Mapping, MutableMapping, Sequence, Tuple
 
 import utils
 import x86_ast
@@ -138,7 +138,9 @@ class Compiler:
     ############################################################################
 
     def assign_homes_arg(
-        self, a: x86_ast.arg, home: dict[x86_ast.Variable, x86_ast.arg]
+        self,
+        a: x86_ast.arg,
+        home: MutableMapping[x86_ast.Variable, x86_ast.Reg | x86_ast.Deref],
     ) -> x86_ast.arg:
         match a:
             case x86_ast.Variable(_):
@@ -151,7 +153,9 @@ class Compiler:
                 return a
 
     def assign_homes_instr(
-        self, i: x86_ast.instr, home: dict[x86_ast.Variable, x86_ast.arg]
+        self,
+        i: x86_ast.instr,
+        home: MutableMapping[x86_ast.Variable, x86_ast.Reg | x86_ast.Deref],
     ) -> x86_ast.instr:
         match i:
             case x86_ast.Instr(op, [arg_0, arg_1]):
@@ -178,9 +182,13 @@ class Compiler:
 
         frame_size = len(homes) if len(homes) % 2 == 0 else len(homes) + 1
         body = [
-            x86_ast.Instr('subq', [x86_ast.Immediate(frame_size * 8), x86_ast.Reg('rsp')]),
+            x86_ast.Instr(
+                "subq", [x86_ast.Immediate(frame_size * 8), x86_ast.Reg("rsp")]
+            ),
             *body,
-            x86_ast.Instr('addq', [x86_ast.Immediate(frame_size * 8), x86_ast.Reg('rsp')]),
+            x86_ast.Instr(
+                "addq", [x86_ast.Immediate(frame_size * 8), x86_ast.Reg("rsp")]
+            ),
         ]
 
         return x86_ast.X86Program(body=body)

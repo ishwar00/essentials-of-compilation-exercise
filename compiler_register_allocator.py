@@ -1,3 +1,5 @@
+import itertools
+
 import compiler
 import x86_ast
 from graph import UndirectedAdjList
@@ -153,9 +155,14 @@ class Compiler(compiler.Compiler):
                 for key, value in saturation_set.items()
                 if len(value) == max_saturation
             ][0]
-            reg_allocation[most_sat_var] = min(
-                set(_color_to_register.keys()) - saturation_set[most_sat_var]
-            )
+
+            allocated_color = 0
+            for color in itertools.count():
+                if color not in saturation_set[most_sat_var]:
+                    allocated_color = color
+                    break
+            reg_allocation[most_sat_var] = allocated_color
+
             print(f"{most_sat_var=} {reg_allocation[most_sat_var]=}")
 
             for edge in graph.out_edges(most_sat_var):

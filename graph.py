@@ -173,7 +173,7 @@ class UndirectedAdjList(DirectedAdjList):
                 
     def show(self):
       from graphviz import Graph
-      dot = Graph(engine='neato')
+      dot = Graph(engine='dot')
       for u in self.vertices():
         dot.node(u.id)
       for e in self.edges():

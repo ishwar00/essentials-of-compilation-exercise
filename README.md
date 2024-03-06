@@ -65,6 +65,9 @@ docker run -it --rm --platform linux/amd64 -v $PWD:/eoc gcc bash
 
 Inside the container:
 ```
+apt update
+apt install -y python3-pip python3-graphviz graphviz
+
 cd eoc
 export PYTHONPATH="$PWD:$PWD/interp_x86"
 gcc -c -g -std=c99 runtime.c

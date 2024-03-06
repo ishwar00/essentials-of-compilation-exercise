@@ -2,5 +2,7 @@
 /runtime.o
 /tests/**/*.s
 /tests/**/*.out
-a.out
-scratch.md
+/a.out
+/scratch.md
+/graph.pdf
+/graph.gv

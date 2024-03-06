@@ -62,3 +62,11 @@ repository.
 ```
 docker run -it --rm --platform linux/amd64 -v $PWD:/eoc gcc bash
 ```
+
+Inside the container:
+```
+cd eoc
+export PYTHONPATH="$PWD:$PWD/interp_x86"
+gcc -c -g -std=c99 runtime.c
+python3 run-tests.py
+```

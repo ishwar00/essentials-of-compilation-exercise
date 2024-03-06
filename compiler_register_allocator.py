@@ -4,6 +4,21 @@ from graph import UndirectedAdjList
 
 # Skeleton code for the chapter on Register Allocation
 
+_color_to_register = {
+    0: x86_ast.Reg("rcx"),
+    1: x86_ast.Reg("rdx"),
+    2: x86_ast.Reg("rsi"),
+    3: x86_ast.Reg("rdi"),
+    4: x86_ast.Reg("r8"),
+    5: x86_ast.Reg("r9"),
+    6: x86_ast.Reg("r10"),
+    7: x86_ast.Reg("rbx"),
+    8: x86_ast.Reg("r12"),
+    9: x86_ast.Reg("r13"),
+    10: x86_ast.Reg("r14"),
+}
+_register_to_color = {reg: color for color, reg in _color_to_register.items()}
+
 
 class Compiler(compiler.Compiler):
     ###########################################################################
@@ -116,6 +131,21 @@ class Compiler(compiler.Compiler):
         saturation_set: dict[x86_ast.Variable, set[int]] = {
             variable: set() for variable in variables
         }
+        dot_graph = graph.show()
+        print("\n", dot_graph)
+        dot_graph.render(outfile="graph.pdf")
+        for vertex in graph.vertices():
+            if isinstance(vertex, x86_ast.Reg):
+                if vertex in _register_to_color:
+                    color = _register_to_color[vertex]
+
+                    for edge in graph.out_edges(vertex):
+                        neighbour = edge.target
+                        saturation_set.get(neighbour, set()).add(color)
+
+        print(f"{saturation_set=}")
+        print(f"{variables=}")
+
         while len(variables) > 0:
             max_saturation = max(len(value) for value in saturation_set.values())
             most_sat_var = [
@@ -123,11 +153,15 @@ class Compiler(compiler.Compiler):
                 for key, value in saturation_set.items()
                 if len(value) == max_saturation
             ][0]
-            reg_allocation[most_sat_var] = len(saturation_set[most_sat_var])
+            reg_allocation[most_sat_var] = min(
+                set(_color_to_register.keys()) - saturation_set[most_sat_var]
+            )
+            print(f"{most_sat_var=} {reg_allocation[most_sat_var]=}")
 
             for edge in graph.out_edges(most_sat_var):
                 if edge.target in saturation_set:
                     saturation_set[edge.target].add(reg_allocation[most_sat_var])
+                    print(f"{saturation_set=}")
 
             saturation_set.pop(most_sat_var)
             variables.remove(most_sat_var)
@@ -143,27 +177,14 @@ class Compiler(compiler.Compiler):
             if isinstance(vertex, x86_ast.Variable)
         }
         color_allocation = self.color_graph(graph, variables)
-        registers = {
-            0: x86_ast.Reg("rcx"),
-            1: x86_ast.Reg("rdx"),
-            2: x86_ast.Reg("rsi"),
-            3: x86_ast.Reg("rdi"),
-            4: x86_ast.Reg("r8"),
-            5: x86_ast.Reg("r9"),
-            6: x86_ast.Reg("r10"),
-            7: x86_ast.Reg("rbx"),
-            8: x86_ast.Reg("r12"),
-            9: x86_ast.Reg("r13"),
-            10: x86_ast.Reg("r14"),
-        }
 
         reg_allocation: dict[x86_ast.Variable, x86_ast.Deref | x86_ast.Reg] = {}
         spilled_count: int = 0
         for loc, color in color_allocation.items():
-            if color in registers:
-                reg_allocation[loc] = registers[color]
+            if color in _color_to_register:
+                reg_allocation[loc] = _color_to_register[color]
             else:
-                offset = color - len(registers)
+                offset = color - len(_color_to_register)
                 reg_allocation[loc] = x86_ast.Deref("rbp", -8 * offset)
                 spilled_count = max(offset, spilled_count)
 
@@ -188,9 +209,13 @@ class Compiler(compiler.Compiler):
 
         frame_size = spilled_count if spilled_count % 2 == 0 else spilled_count + 1
         body = [
-            x86_ast.Instr('subq', [x86_ast.Immediate(frame_size * 8), x86_ast.Reg('rsp')]),
+            x86_ast.Instr(
+                "subq", [x86_ast.Immediate(frame_size * 8), x86_ast.Reg("rsp")]
+            ),
             *body,
-            x86_ast.Instr('addq', [x86_ast.Immediate(frame_size * 8), x86_ast.Reg('rsp')]),
+            x86_ast.Instr(
+                "addq", [x86_ast.Immediate(frame_size * 8), x86_ast.Reg("rsp")]
+            ),
         ]
 
         return x86_ast.X86Program(body=body)

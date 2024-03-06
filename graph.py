@@ -1,5 +1,7 @@
 from collections import deque
 
+from x86_ast import Reg
+
 class Edge:
     def __init__(self, src, tgt):
         self.source = src
@@ -173,9 +175,9 @@ class UndirectedAdjList(DirectedAdjList):
       from graphviz import Graph
       dot = Graph(engine='neato')
       for u in self.vertices():
-        dot.node(self.name(u))
+        dot.node(u.id)
       for e in self.edges():
-        dot.edge(self.name(e.source), self.name(e.target), len='1.5')
+        dot.edge(e.source.id, e.target.id, len='1.5')
       return dot
 
 

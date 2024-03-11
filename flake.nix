@@ -20,10 +20,19 @@
         };
       in {
         devShells.default = pkgs.mkShell {
-          buildInputs = with pkgs; [python312 gcc];
+          buildInputs = with pkgs; [
+            (python312.withPackages (ps:
+              with ps; [
+                graphviz
+                black
+              ]))
+            gcc
+            graphviz
+            nodePackages.pyright
+          ];
           shellHook = ''
-          export PYTHONPATH="$(realpath .):$(realpath ./interp_x86)"
-          gcc -c -g -std=c99 runtime.c
+            export PYTHONPATH="$(realpath .):$(realpath ./interp_x86)"
+            gcc -c -g -std=c99 runtime.c
           '';
         };
       }

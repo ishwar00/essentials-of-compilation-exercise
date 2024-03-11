@@ -222,7 +222,8 @@ class Compiler:
                 case _:
                     body.append(instr)
 
-        return x86_ast.X86Program(body=body)
+        p.body = body
+        return p
 
     #############################################################################
     ## Prelude & Conclusion

@@ -10,6 +10,8 @@ from utils import dedent, indent, indent_stmt, label_name
 @dataclass
 class X86Program:
     body: dict[str, list[instr]] | list[instr]
+    spilled_count: int | None = None
+    used_callee: set[Reg] | None = None
 
     def __str__(self):
         result = ''

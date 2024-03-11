@@ -19,6 +19,12 @@ _color_to_register = {
     9: x86_ast.Reg("r13"),
     10: x86_ast.Reg("r14"),
 }
+_callee_saved_registers = {
+    x86_ast.Reg("rbx"),
+    x86_ast.Reg("r12"),
+    x86_ast.Reg("r13"),
+    x86_ast.Reg("r14"),
+}
 _register_to_color = {reg: color for color, reg in _color_to_register.items()}
 
 
@@ -214,18 +220,12 @@ class Compiler(compiler.Compiler):
                 case _:
                     body.append(instr)  # type: ignore
 
-        frame_size = spilled_count if spilled_count % 2 == 0 else spilled_count + 1
-        body = [
-            x86_ast.Instr(
-                "subq", [x86_ast.Immediate(frame_size * 8), x86_ast.Reg("rsp")]
-            ),
-            *body,
-            x86_ast.Instr(
-                "addq", [x86_ast.Immediate(frame_size * 8), x86_ast.Reg("rsp")]
-            ),
-        ]
+        used_locations = set(reg_allocation.values())
+        used_callee = _callee_saved_registers & used_locations
 
-        return x86_ast.X86Program(body=body)
+        return x86_ast.X86Program(
+            body=body, spilled_count=spilled_count, used_callee=used_callee
+        )
 
     ###########################################################################
     # Patch Instructions
@@ -258,6 +258,29 @@ class Compiler(compiler.Compiler):
     # Prelude & Conclusion
     ###########################################################################
 
-    # def prelude_and_conclusion(self, p: X86Program) -> X86Program:
-    #     # YOUR CODE HERE
-    #     pass
+    def prelude_and_conclusion(self, p: x86_ast.X86Program) -> x86_ast.X86Program:
+        assert p.spilled_count is not None
+        assert p.used_callee is not None
+
+        total_used = p.spilled_count + len(p.used_callee)
+
+        frame_size = (total_used if total_used % 2 == 0 else total_used + 1) - len(
+            p.used_callee
+        )
+        body = [
+            x86_ast.Instr("pushq", [x86_ast.Reg("rbp")]),
+            x86_ast.Instr("movq", [x86_ast.Reg("rsp"), x86_ast.Reg("rbp")]),
+            x86_ast.Instr(
+                "subq", [x86_ast.Immediate(frame_size * 8), x86_ast.Reg("rsp")]
+            ),
+            *(x86_ast.Instr("pushq", [r]) for r in p.used_callee),
+            *p.body,
+            *(x86_ast.Instr("popq", [r]) for r in p.used_callee),
+            x86_ast.Instr(
+                "addq", [x86_ast.Immediate(frame_size * 8), x86_ast.Reg("rsp")]
+            ),
+            x86_ast.Instr("popq", [x86_ast.Reg("rbp")]),
+            x86_ast.Instr("retq", []),
+        ]
+
+        return x86_ast.X86Program(body=body)

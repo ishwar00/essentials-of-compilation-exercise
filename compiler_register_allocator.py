@@ -132,22 +132,25 @@ class Compiler(compiler.Compiler):
 
     # # Returns the coloring and the set of spilled variables.
     def color_graph(
-        self, graph: UndirectedAdjList, variables: set[x86_ast.Variable]
+        self,
+        interference_graph: UndirectedAdjList,
+        variables: set[x86_ast.Variable],
+        move_graph: UndirectedAdjList,
     ) -> dict[x86_ast.Variable, int]:
         reg_allocation: dict[x86_ast.Variable, int] = {}
         # TODO: use priority queue
         saturation_set: dict[x86_ast.Variable, set[int]] = {
             variable: set() for variable in variables
         }
-        dot_graph = graph.show()
+        dot_graph = interference_graph.show()
         print("\n", dot_graph)
         dot_graph.render(outfile="graph.pdf")
-        for vertex in graph.vertices():
+        for vertex in interference_graph.vertices():
             if isinstance(vertex, x86_ast.Reg):
                 if vertex in _register_to_color:
                     color = _register_to_color[vertex]
 
-                    for edge in graph.out_edges(vertex):
+                    for edge in interference_graph.out_edges(vertex):
                         neighbour = edge.target
                         saturation_set.get(neighbour, set()).add(color)
 
@@ -156,40 +159,72 @@ class Compiler(compiler.Compiler):
 
         while len(variables) > 0:
             max_saturation = max(len(value) for value in saturation_set.values())
-            most_sat_var = [
+            most_sat_vars = [
                 key
                 for key, value in saturation_set.items()
                 if len(value) == max_saturation
-            ][0]
+            ]
 
-            allocated_color = 0
-            for color in itertools.count():
-                if color not in saturation_set[most_sat_var]:
-                    allocated_color = color
+            chosen_sat_var: None | x86_ast.Variable = None
+            move_related_color: int | None = None
+            for var in most_sat_vars:
+                if var not in move_graph.out:
+                    continue
+
+                for edge in move_graph.out_edges(var):
+                    color = reg_allocation.get(edge.target)
+                    if color is not None and color not in saturation_set[var]:
+                        move_related_color = color
+                        chosen_sat_var = var
+                        break
+
+                if chosen_sat_var is not None:
                     break
-            reg_allocation[most_sat_var] = allocated_color
 
-            print(f"{most_sat_var=} {reg_allocation[most_sat_var]=}")
+            if chosen_sat_var is None:
+                chosen_sat_var = most_sat_vars[0]
 
-            for edge in graph.out_edges(most_sat_var):
+            lowest_avail_color = 0
+            for color in itertools.count():
+                if color not in saturation_set[chosen_sat_var]:
+                    lowest_avail_color = color
+                    break
+
+            # both stack
+            # both are registers
+            # lowest_avail_color is register and move_related_color is stack
+            if move_related_color in _color_to_register:
+                reg_allocation[chosen_sat_var] = move_related_color
+            elif (
+                move_related_color is not None
+                and move_related_color not in _color_to_register
+                and lowest_avail_color not in _color_to_register
+            ):
+                reg_allocation[chosen_sat_var] = move_related_color
+            else:
+                reg_allocation[chosen_sat_var] = lowest_avail_color
+
+            print(f"{chosen_sat_var=} {reg_allocation[chosen_sat_var]=}")
+
+            for edge in interference_graph.out_edges(chosen_sat_var):
                 if edge.target in saturation_set:
-                    saturation_set[edge.target].add(reg_allocation[most_sat_var])
+                    saturation_set[edge.target].add(reg_allocation[chosen_sat_var])
                     print(f"{saturation_set=}")
 
-            saturation_set.pop(most_sat_var)
-            variables.remove(most_sat_var)
+            saturation_set.pop(chosen_sat_var)
+            variables.remove(chosen_sat_var)
 
         return reg_allocation
 
     def allocate_registers(
-        self, graph: UndirectedAdjList
+        self, interference_graph: UndirectedAdjList, move_graph: UndirectedAdjList
     ) -> tuple[dict[x86_ast.Variable, x86_ast.Deref | x86_ast.Reg], int]:
         variables: set[x86_ast.Variable] = {
             vertex
-            for vertex in graph.vertices()
+            for vertex in interference_graph.vertices()
             if isinstance(vertex, x86_ast.Variable)
         }
-        color_allocation = self.color_graph(graph, variables)
+        color_allocation = self.color_graph(interference_graph, variables, move_graph)
 
         reg_allocation: dict[x86_ast.Variable, x86_ast.Deref | x86_ast.Reg] = {}
         spilled_count: int = 0
@@ -203,6 +238,19 @@ class Compiler(compiler.Compiler):
 
         return reg_allocation, spilled_count
 
+    def build_move_graph(self, p: x86_ast.X86Program) -> UndirectedAdjList:
+        graph = UndirectedAdjList()
+
+        assert isinstance(p.body, list)
+        for instr in p.body:
+            match instr:
+                case x86_ast.Instr(
+                    "movq", [x86_ast.Variable(_) as s, x86_ast.Variable(_) as d]
+                ):
+                    graph.add_edge(s, d)
+
+        return graph
+
     ############################################################################
     # Assign Homes
     ############################################################################
@@ -210,7 +258,8 @@ class Compiler(compiler.Compiler):
     def assign_homes(self, p: x86_ast.X86Program) -> x86_ast.X86Program:
         live_after_set = self.uncover_live(p)
         graph = self.build_interference(p, live_after_set)
-        reg_allocation, spilled_count = self.allocate_registers(graph)
+        move_graph = self.build_move_graph(p)
+        reg_allocation, spilled_count = self.allocate_registers(graph, move_graph)
 
         body: list[x86_ast.instr] = []
         for instr in p.body:

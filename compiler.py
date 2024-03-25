@@ -1,5 +1,5 @@
 import ast
-from typing import Mapping, MutableMapping, Sequence, Tuple
+from typing import MutableMapping, Sequence, Tuple
 
 import utils
 import x86_ast

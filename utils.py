@@ -4,6 +4,7 @@ from sys import platform
 import ast
 from ast import *
 from dataclasses import dataclass
+from typing import Sequence
 
 # move these to the compilers, use a method with overrides -Jeremy
 builtin_functions = {
@@ -802,7 +803,7 @@ class Uninitialized(expr):
 @dataclass
 class CProgram:
     __match_args__ = ("body",)
-    body: list[stmt]
+    body: dict[str, Sequence[stmt]]
 
     def __str__(self):
         result = ""

@@ -1,11 +1,31 @@
 import ast
-from typing import MutableMapping, Sequence, Tuple
+from typing import Sequence, Tuple
 
 import utils
 import x86_ast
 
 Binding = Tuple[ast.Name, ast.expr]
 Temporaries = Sequence[Binding]
+
+
+def _condition_code(op: ast.cmpop) -> str:
+    match op:
+        case ast.Lt():
+            return "l"
+        case ast.LtE():
+            return "le"
+        case ast.Lt():
+            return "l"
+        case ast.Gt():
+            return "g"
+        case ast.GtE():
+            return "ge"
+        case ast.NotEq():
+            return "ne"
+        case ast.Eq():
+            return "e"
+        case _:
+            raise Exception(f"_condition_code: unexpected op: {op}. type: {type(op)}")
 
 
 class Compiler:
@@ -211,9 +231,24 @@ class Compiler:
     ) -> Sequence[ast.stmt]:
         match cond:
             case ast.Compare() | ast.UnaryOp(ast.Not) | ast.Name():
-                body = self.create_block(body, basic_blocks)
-                orelse = self.create_block(orelse, basic_blocks)
-                return self.create_block([ast.If(cond, body, orelse)], basic_blocks)
+                return self.create_block(
+                    [
+                        ast.If(
+                            cond,
+                            self.create_block(body, basic_blocks),
+                            self.create_block(orelse, basic_blocks),
+                        )
+                    ],
+                    basic_blocks,
+                )
+            case utils.Begin(stmts, result):
+                return self.create_block(
+                    [
+                        *stmts,
+                        *self.explicate_pred(result, body, orelse, basic_blocks),
+                    ],
+                    basic_blocks,
+                )
             case ast.IfExp(condition, cond_body, cond_orelse):
                 body = self.create_block(body, basic_blocks)
                 orelse = self.create_block(orelse, basic_blocks)
@@ -230,18 +265,6 @@ class Compiler:
                 return body
             case ast.Constant(False):
                 return orelse
-            case utils.Begin(stmts, result):
-                return self.create_block(
-                    [
-                        *stmts,
-                        ast.If(
-                            result,
-                            self.create_block(body, basic_blocks),
-                            self.create_block(orelse, basic_blocks),
-                        ),
-                    ],
-                    basic_blocks,
-                )
             case _:
                 raise Exception(f"explicate_pred: invalid condition: {cond}")
 
@@ -288,3 +311,131 @@ class Compiler:
                     new_body = self.explicate_stmt(s, new_body, basic_blocks)
                 basic_blocks[utils.label_name("start")] = new_body
                 return utils.CProgram(basic_blocks)
+
+    ### select instructions
+
+    def select_arg(self, e: ast.expr) -> x86_ast.arg:
+        match e:
+            case ast.Constant(True):
+                return x86_ast.Immediate(1)
+            case ast.Constant(False):
+                return x86_ast.Immediate(0)
+            case ast.Constant(c):
+                return x86_ast.Immediate(c)
+            case ast.Name(v):
+                return x86_ast.Variable(v)
+        raise Exception()
+
+    def select_stmt(self, s: ast.stmt) -> Sequence[x86_ast.instr]:
+        match s:
+            case ast.Expr(ast.Call(ast.Name("print"), [atm])):
+                lhs = self.select_arg(atm)
+                return [
+                    x86_ast.Instr("movq", [lhs, x86_ast.Reg("rdi")]),
+                    x86_ast.Callq(utils.label_name("print_int"), 1),
+                ]
+            case ast.Assign([var], exp):
+                lhs = self.select_arg(var)
+                match exp:
+                    case ast.Constant(_) | ast.Name(_):
+                        return [x86_ast.Instr("movq", [self.select_arg(exp), lhs])]
+                    case ast.Call(ast.Name("input_int"), []):
+                        return [
+                            x86_ast.Callq(utils.label_name("read_int"), 0),
+                            x86_ast.Instr("movq", [x86_ast.Reg("rax"), lhs]),
+                        ]
+                    case ast.UnaryOp(ast.USub(), atm):
+                        return [
+                            x86_ast.Instr("movq", [self.select_arg(atm), lhs]),
+                            x86_ast.Instr("negq", [lhs]),
+                        ]
+                    case ast.BinOp(atm1, op, atm2):
+                        return [
+                            x86_ast.Instr("movq", [self.select_arg(atm1), lhs]),
+                            x86_ast.Instr(
+                                "addq" if isinstance(op, ast.Add) else "subq",
+                                [self.select_arg(atm2), lhs],
+                            ),
+                        ]
+                    case ast.UnaryOp(ast.Not(), atm):
+                        match atm:
+                            case ast.Name(left_var) if isinstance(
+                                lhs, x86_ast.Variable
+                            ) and left_var == lhs.id:
+                                return [
+                                    x86_ast.Instr("xorq", [x86_ast.Immediate(1), lhs])
+                                ]
+                            case _:
+                                atm = self.select_arg(atm)
+                                return [
+                                    x86_ast.Instr("movq", [atm, lhs]),
+                                    x86_ast.Instr("xorq", [x86_ast.Immediate(1), lhs]),
+                                ]
+                    case ast.Compare(atm1, [op], [atm2]):
+                        atm1 = self.select_arg(atm1)
+                        atm2 = self.select_arg(atm2)
+                        return [
+                            x86_ast.Instr("cmpq", [atm2, atm1]),
+                            x86_ast.Instr(
+                                f"set{_condition_code(op)}", [x86_ast.Reg("al")]
+                            ),
+                            x86_ast.Instr("movzbq", [x86_ast.Reg("al"), lhs]),
+                        ]
+                    case _:
+                        raise Exception(f"Unsupported expression in assignment: {exp}")
+            case ast.If(cond, body, orelse):
+                assert isinstance(body[0], utils.Goto)
+                assert isinstance(orelse[0], utils.Goto)
+                body_label = body[0].label
+                orelse_label = orelse[0].label
+                match cond:
+                    case ast.Compare(left, [op], [right]):
+                        left = self.select_arg(left)
+                        right = self.select_arg(right)
+                        return [
+                            x86_ast.Instr("cmpq", [right, left]),
+                            x86_ast.JumpIf(_condition_code(op), body_label),
+                            x86_ast.Jump(orelse_label),
+                        ]
+                    case ast.UnaryOp(ast.Not(), exp):
+                        exp = self.select_arg(exp)
+                        return [
+                            x86_ast.Instr("cmpq", [exp, x86_ast.Immediate(0)]),
+                            x86_ast.JumpIf("e", body_label),
+                            x86_ast.Jump(orelse_label),
+                        ]
+                    case ast.Name(var):
+                        exp = self.select_arg(cond)
+                        return [
+                            x86_ast.Instr("cmpq", [exp, x86_ast.Immediate(1)]),
+                            x86_ast.JumpIf("e", body_label),
+                            x86_ast.Jump(orelse_label),
+                        ]
+                    case _:
+                        raise Exception(
+                            f"Unsupported if condition: {cond}. type: {type(cond)}"
+                        )
+            case ast.Return(value):
+                value = (
+                    self.select_arg(value)
+                    if value is not None
+                    else x86_ast.Immediate(0)
+                )
+                return [
+                    x86_ast.Instr("movq", [value, x86_ast.Reg("rax")]),
+                    x86_ast.Jump(x86_ast.label_name("conclusion")),
+                ]
+            case utils.Goto(label):
+                return [x86_ast.Jump(label)]
+            case _:
+                raise Exception(f"Unsupported statement type: {s}")
+
+    def select_instructions(self, p: utils.CProgram) -> x86_ast.X86Program:
+        x86_blocks: dict[str, list[x86_ast.instr]] = {}
+
+        for label, stmts in p.body.items():
+            x86_blocks[label] = [
+                instr for stmt in stmts for instr in self.select_stmt(stmt)
+            ]
+
+        return x86_ast.X86Program(x86_blocks)

@@ -120,17 +120,32 @@ class Compiler:
             case ast.IfExp(condition, body, orelse):
                 (simplified_cond, cond_temps) = self.rco_exp(condition, False)
 
-                (body_expr, body_temps) = self.rco_exp(body, True)
-                body_expr = utils.Begin(
-                    [ast.Assign([var], value) for (var, value) in body_temps],
-                    body_expr,
-                )
+                (body_expr, body_temps) = self.rco_exp(body, need_atomic)
+                if body_temps:
+                    body_expr = utils.Begin(
+                        [ast.Assign([var], value) for (var, value) in body_temps],
+                        body_expr,
+                    )
 
-                (orelse_expr, orelse_temps) = self.rco_exp(orelse, True)
-                orelse_expr = utils.Begin(
-                    [ast.Assign([var], value) for (var, value) in orelse_temps],
-                    orelse_expr,
-                )
+                (orelse_expr, orelse_temps) = self.rco_exp(orelse, need_atomic)
+                if orelse_temps:
+                    orelse_expr = utils.Begin(
+                        [ast.Assign([var], value) for (var, value) in orelse_temps],
+                        orelse_expr,
+                    )
+
+                if need_atomic:
+                    tmp = utils.generate_name("tmp")
+                    return (
+                        ast.Name(tmp),
+                        [
+                            *cond_temps,
+                            (
+                                ast.Name(tmp),
+                                ast.IfExp(simplified_cond, body_expr, orelse_expr),
+                            ),
+                        ],
+                    )
 
                 return ast.IfExp(simplified_cond, body_expr, orelse_expr), cond_temps
             case _:
@@ -230,7 +245,7 @@ class Compiler:
         basic_blocks: dict[str, Sequence[ast.stmt]],
     ) -> Sequence[ast.stmt]:
         match cond:
-            case ast.Compare() | ast.UnaryOp(ast.Not) | ast.Name():
+            case ast.Compare() | ast.UnaryOp(ast.Not()) | ast.Name():
                 return self.create_block(
                     [
                         ast.If(
@@ -258,9 +273,7 @@ class Compiler:
                     cond_orelse, body, orelse, basic_blocks
                 )
 
-                return self.create_block(
-                    [ast.If(condition, cond_body, cond_orelse)], basic_blocks
-                )
+                return self.explicate_pred(condition, cond_body, cond_orelse, basic_blocks)
             case ast.Constant(True):
                 return body
             case ast.Constant(False):

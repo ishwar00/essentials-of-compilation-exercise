@@ -1364,6 +1364,7 @@ def test_pass(passname, interp_dict, program_root, ast, compiler_name):
                 + program_root
                 + "\n"
             )
+            print(ast)
             return 0
     else:
         trace(

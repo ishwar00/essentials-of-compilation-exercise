@@ -1,10 +1,11 @@
+d = 1234
 a = 10 + 1
 b = 1 + 2
 c = 100
 if a > b:
     if c > a:
-        print(1)
+        print(d + 1)
     else:
-        print(2)
+        print(d + 2)
 else:
-    print(3)
+    print(d + 3)

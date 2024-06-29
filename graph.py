@@ -1,4 +1,5 @@
 from collections import deque
+from typing import Any
 
 from x86_ast import Reg
 
@@ -22,7 +23,7 @@ class Edge:
     def __eq__(self, other):
         return self.raw() == other.raw()
 
-Vertex = any
+Vertex = Any
 
 ################################################################################
 # Directed Adjacency List
@@ -185,7 +186,7 @@ class UndirectedAdjList(DirectedAdjList):
 # Topological Sort
 ################################################################################
 
-def topological_sort(G: DirectedAdjList) -> [Vertex]:
+def topological_sort(G: DirectedAdjList) -> list[Vertex]:
     in_degree = {u: 0 for u in G.vertices()}
     for e in G.edges():
         in_degree[e.target] += 1

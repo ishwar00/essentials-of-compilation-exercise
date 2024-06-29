@@ -25,6 +25,9 @@
               with ps; [
                 graphviz
                 black
+
+                # debugger
+                pudb
               ]))
             gcc
             graphviz
@@ -34,6 +37,7 @@
             export PYTHONPATH="$(realpath .):$(realpath ./interp_x86)"
             gcc -c -g -std=c99 runtime.c
           '';
+          PYTHONBREAKPOINT="pudb.set_trace";
         };
       }
     );

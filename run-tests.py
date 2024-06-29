@@ -14,7 +14,7 @@ from interp_x86.eval_x86 import interp_x86
 from interp_Cif import InterpCif
 
 
-enable_tracing()
+# enable_tracing()
 
 
 class DummyCompile: ...

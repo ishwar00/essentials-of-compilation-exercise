@@ -1,5 +1,5 @@
 import ast
-from utils import IntType
+from utils import IntType, trace
 
 
 class TypeCheckLvar:
@@ -51,7 +51,7 @@ class TypeCheckLvar:
                 raise Exception("type_check_stmts: unexpected " + repr(ss))
 
     def type_check(self, p: ast.Module):
-        print('type_check::')
+        trace('type_check::')
         match p:
             case ast.Module(body):
                 self.type_check_stmts(body, {})

@@ -837,3 +837,50 @@ class Compiler:
         return x86_ast.X86Program(
             body=new_body, spilled_count=spilled_count, used_callee=used_callee
         )
+
+    def patch_instr(self, i: x86_ast.instr) -> list[x86_ast.instr]:
+        match i:
+            case x86_ast.Instr(
+                instr,
+                [arg_0, arg_1],
+            ) if arg_0 == arg_1:
+                return []
+
+            case x86_ast.Instr(
+                instr,
+                [
+                    x86_ast.Deref() as arg_0,
+                    x86_ast.Deref() as arg_1,
+                ],
+            ):
+                return [
+                    x86_ast.Instr("movq", [arg_0, x86_ast.Reg("rax")]),
+                    x86_ast.Instr(instr, [x86_ast.Reg("rax"), arg_1]),
+                ]
+
+            case _:
+                return [i]
+
+
+    def patch_instructions(self, p: x86_ast.X86Program) -> x86_ast.X86Program:
+        body = []
+
+        assert isinstance(p.body, dict)
+
+        def _transform_instr(instr: x86_ast.instr) -> list[x86_ast.instr]:
+            match instr:
+                case x86_ast.Instr(_, [_, _]):
+                    return self.patch_instr(instr)
+                case _:
+                    return [instr]
+
+        new_body = {
+            label: [_transform_instr(instr) for instr in block]
+            for label, block in p.body.items()
+        }
+
+        p.body = body
+        return p
+
+
+

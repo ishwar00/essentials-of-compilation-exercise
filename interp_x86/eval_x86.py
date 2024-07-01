@@ -378,6 +378,9 @@ class X86Emulator:
                 v1 = self.eval_arg(a1)
                 v2 = self.eval_arg(a2)
 
+                import sys
+                print(f"in cmpq v1 = {v1}, a1 = {a1}, v2 = {v2}, a2 = {a2}", file=sys.stderr)
+
                 if v1 == v2:
                     self.registers['EFLAGS'] = 'e'
                 elif v2 < v1:

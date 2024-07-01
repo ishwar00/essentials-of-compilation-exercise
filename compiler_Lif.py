@@ -4,8 +4,7 @@ from typing import Sequence, Tuple
 
 import utils
 import x86_ast
-from graph import (DirectedAdjList, UndirectedAdjList, topological_sort,
-                   transpose)
+from graph import DirectedAdjList, UndirectedAdjList, topological_sort, transpose
 
 Binding = Tuple[ast.Name, ast.expr]
 Temporaries = Sequence[Binding]
@@ -861,10 +860,7 @@ class Compiler:
             case _:
                 return [i]
 
-
     def patch_instructions(self, p: x86_ast.X86Program) -> x86_ast.X86Program:
-        body = []
-
         assert isinstance(p.body, dict)
 
         def _transform_instr(instr: x86_ast.instr) -> list[x86_ast.instr]:
@@ -875,12 +871,9 @@ class Compiler:
                     return [instr]
 
         new_body = {
-            label: [_transform_instr(instr) for instr in block]
+            label: [i for instr in block for i in _transform_instr(instr)]
             for label, block in p.body.items()
         }
 
-        p.body = body
+        p.body = new_body
         return p
-
-
-

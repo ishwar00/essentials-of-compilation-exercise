@@ -840,6 +840,28 @@ class Compiler:
     def patch_instr(self, i: x86_ast.instr) -> list[x86_ast.instr]:
         match i:
             case x86_ast.Instr(
+                'movzbq',
+                [
+                    arg_0,
+                    arg_1,
+                ],
+            ) if not isinstance(arg_1, x86_ast.Reg):
+                return [
+                    x86_ast.Instr("movq", [arg_1, x86_ast.Reg("rax")]),
+                    x86_ast.Instr('movzbq', [arg_0, x86_ast.Reg("rax")]),
+                ]
+            case x86_ast.Instr(
+                'cmpq',
+                [
+                    arg_0,
+                    x86_ast.Immediate() as arg_1,
+                ],
+            ):
+                return [
+                    x86_ast.Instr("movq", [arg_1, x86_ast.Reg("rax")]),
+                    x86_ast.Instr('cmpq', [arg_0, x86_ast.Reg("rax")]),
+                ]
+            case x86_ast.Instr(
                 instr,
                 [arg_0, arg_1],
             ) if arg_0 == arg_1:

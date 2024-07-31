@@ -1,13 +1,14 @@
 import ast
+from collections.abc import Callable, Sequence
+from collections import defaultdict
+from dataclasses import dataclass
 import itertools
-from typing import Sequence, Tuple
 
 import utils
 import x86_ast
-from graph import (DirectedAdjList, UndirectedAdjList, topological_sort,
-                   transpose)
+from graph import DirectedAdjList, UndirectedAdjList, topological_sort, transpose
 
-Binding = Tuple[ast.Name, ast.expr]
+Binding = tuple[ast.Name, ast.expr]
 Temporaries = Sequence[Binding]
 
 _color_to_register = {
@@ -52,6 +53,24 @@ def _condition_code(op: ast.cmpop) -> str:
             raise Exception(f"_condition_code: unexpected op: {op}. type: {type(op)}")
 
 
+@dataclass
+class Promise:
+    fn: Callable[[], Sequence[ast.stmt]]
+    cache: Sequence[ast.stmt] | None = None
+
+    def force(self):
+        if self.cache is None:
+            self.cache = self.fn()
+        return self.cache
+
+
+def force(promise: Promise | Sequence[ast.stmt]):
+    if isinstance(promise, Promise):
+        return promise.force()
+    else:
+        return promise
+
+
 class Compiler:
     def _shrink_exp(self, e: ast.expr) -> ast.expr:
         match e:
@@ -69,7 +88,9 @@ class Compiler:
     def _shrink_stmt(self, s: ast.stmt) -> ast.stmt:
         match s:
             case ast.Expr(ast.Call(ast.Name("print"), [exp])):
-                return ast.Expr(ast.Call(ast.Name("print"), [self._shrink_exp(exp)]))
+                return ast.Expr(
+                    ast.Call(ast.Name("print"), [self._shrink_exp(exp)], [])
+                )
             case ast.Expr(expr):
                 return ast.Expr(self._shrink_exp(expr))
             case ast.Assign([ast.Name(var)], exp):
@@ -86,9 +107,9 @@ class Compiler:
         match p:
             case ast.Module(ss):
                 sss = [self._shrink_stmt(s) for s in ss]
-                return ast.Module(sss)
+                return ast.Module(sss, [])
 
-    def rco_exp(self, e: ast.expr, need_atomic: bool) -> Tuple[ast.expr, Temporaries]:
+    def rco_exp(self, e: ast.expr, need_atomic: bool) -> tuple[ast.expr, Temporaries]:
         match e:
             case ast.Constant(v):
                 return ast.Constant(v), []
@@ -99,9 +120,9 @@ class Compiler:
                     tmp = utils.generate_name("tmp")
                     return (
                         ast.Name(tmp),
-                        [(ast.Name(tmp), ast.Call(ast.Name("input_int"), []))],
+                        [(ast.Name(tmp), ast.Call(ast.Name("input_int"), [], []))],
                     )
-                return (ast.Call(ast.Name("input_int"), []), [])
+                return (ast.Call(ast.Name("input_int"), [], []), [])
             case ast.UnaryOp(ast.USub() | ast.Not() as op, condition):
                 (atm, temps) = self.rco_exp(condition, True)
                 if need_atomic:
@@ -180,7 +201,7 @@ class Compiler:
             case ast.Expr(ast.Call(ast.Name("print"), [exp])):
                 (atm, temps) = self.rco_exp(exp, True)
                 return [ast.Assign([var], value) for (var, value) in temps] + [
-                    ast.Expr(ast.Call(ast.Name("print"), [atm]))
+                    ast.Expr(ast.Call(ast.Name("print"), [atm], []))
                 ]
             case ast.Expr(expr):
                 (atm, temps) = self.rco_exp(expr, False)
@@ -207,21 +228,27 @@ class Compiler:
         match p:
             case ast.Module(ss):
                 sss = [stmt for s in ss for stmt in self.rco_stmt(s)]
-                return ast.Module(sss)
+                return ast.Module(sss, [])
         raise Exception("remove_complex_operands not implemented")
 
     ##### explicate control
 
     def create_block(
-        self, stmts: Sequence[ast.stmt], basic_blocks: dict[str, Sequence[ast.stmt]]
-    ) -> Sequence[ast.stmt]:
-        match stmts:
-            case [utils.Goto(_)]:
-                return stmts
-            case _:
-                label = utils.label_name(utils.generate_name("block"))
-                basic_blocks[label] = stmts
-                return [utils.Goto(label)]
+        self,
+        promise: Sequence[ast.stmt] | Promise,
+        basic_blocks: dict[str, Sequence[ast.stmt]],
+    ) -> Promise:
+        def delay():
+            stmts = force(promise)
+            match stmts:
+                case [utils.Goto(_)]:
+                    return stmts
+                case _:
+                    label = utils.label_name(utils.generate_name("block"))
+                    basic_blocks[label] = stmts
+                    return [utils.Goto(label)]
+
+        return Promise(delay)
 
     def explicate_effect(
         self,
@@ -238,7 +265,7 @@ class Compiler:
                     *cont,
                 ]
             case ast.Call(name, args):
-                return [ast.Expr(ast.Call(name, args)), *cont]
+                return [ast.Expr(ast.Call(name, args, [])), *cont]
             case utils.Begin(stmts, _):
                 return [*stmts, *cont]
             case _:
@@ -264,8 +291,8 @@ class Compiler:
     def explicate_pred(
         self,
         cond: ast.expr,
-        body: Sequence[ast.stmt],
-        orelse: Sequence[ast.stmt],
+        body: Sequence[ast.stmt] | Promise,
+        orelse: Sequence[ast.stmt] | Promise,
         basic_blocks: dict[str, Sequence[ast.stmt]],
     ) -> Sequence[ast.stmt]:
         match cond:
@@ -274,12 +301,12 @@ class Compiler:
                     [
                         ast.If(
                             cond,
-                            self.create_block(body, basic_blocks),
-                            self.create_block(orelse, basic_blocks),
+                            list(self.create_block(body, basic_blocks).force()),
+                            list(self.create_block(orelse, basic_blocks).force()),
                         )
                     ],
                     basic_blocks,
-                )
+                ).force()
             case utils.Begin(stmts, result):
                 return self.create_block(
                     [
@@ -287,7 +314,7 @@ class Compiler:
                         *self.explicate_pred(result, body, orelse, basic_blocks),
                     ],
                     basic_blocks,
-                )
+                ).force()
             case ast.IfExp(condition, cond_body, cond_orelse):
                 body = self.create_block(body, basic_blocks)
                 orelse = self.create_block(orelse, basic_blocks)
@@ -301,9 +328,9 @@ class Compiler:
                     condition, cond_body, cond_orelse, basic_blocks
                 )
             case ast.Constant(True):
-                return body
+                return force(body)
             case ast.Constant(False):
-                return orelse
+                return force(orelse)
             case _:
                 raise Exception(f"explicate_pred: invalid condition: {cond}")
 
@@ -482,6 +509,38 @@ class Compiler:
             ]
 
         return x86_ast.X86Program(x86_blocks)
+
+    def remove_jumps(self, p: x86_ast.X86Program) -> x86_ast.X86Program:
+        jump_sources: dict[str, list[str]] = defaultdict(list)
+
+        assert isinstance(p.body, dict)
+
+        for source, block in p.body.items():
+            for instr in block:
+                match instr:
+                    case x86_ast.JumpIf(_, target) | x86_ast.Jump(target):
+                        jump_sources[target].append(source)
+
+        blocks_to_inline = [
+            (sources[0], target)
+            for target, sources in jump_sources.items()
+            if len(sources) == 1
+        ]
+
+        for source, target in blocks_to_inline:
+            source_block = p.body[source]
+            match source_block[-1]:
+                case x86_ast.Jump(target_label) if target_label == target:
+                    pass
+                case _:
+                    continue
+
+            source_block = source_block[:-1]
+            source_block = source_block + p.body[target]
+            p.body[source] = source_block
+            p.body.pop(target)
+
+        return p
 
     @staticmethod
     def _location_set(arg: x86_ast.arg) -> set[x86_ast.location]:
@@ -805,8 +864,8 @@ class Compiler:
                 return x86_ast.Instr(op, [arg_0, arg_1])
 
             case x86_ast.Instr(op, [arg_0]):
-                arg_1 = self.assign_homes_arg(arg_0, home)
-                return x86_ast.Instr(op, [arg_0, arg_1])
+                arg_0 = self.assign_homes_arg(arg_0, home)
+                return x86_ast.Instr(op, [arg_0])
 
             case _:
                 raise Exception(f"invalid instruction: {i}")
@@ -837,3 +896,109 @@ class Compiler:
         return x86_ast.X86Program(
             body=new_body, spilled_count=spilled_count, used_callee=used_callee
         )
+
+    def patch_instr(self, i: x86_ast.instr) -> list[x86_ast.instr]:
+        match i:
+            case x86_ast.Instr(
+                "movzbq",
+                [
+                    arg_0,
+                    arg_1,
+                ],
+            ) if not isinstance(arg_1, x86_ast.Reg):
+                return [
+                    x86_ast.Instr("movq", [arg_1, x86_ast.Reg("rax")]),
+                    x86_ast.Instr("movzbq", [arg_0, x86_ast.Reg("rax")]),
+                ]
+
+            case x86_ast.Instr(
+                "cmpq",
+                [
+                    arg_0,
+                    x86_ast.Immediate() as arg_1,
+                ],
+            ):
+                return [
+                    x86_ast.Instr("movq", [arg_1, x86_ast.Reg("rax")]),
+                    x86_ast.Instr("cmpq", [arg_0, x86_ast.Reg("rax")]),
+                ]
+
+            case x86_ast.Instr(
+                instr,
+                [arg_0, arg_1],
+            ) if arg_0 == arg_1:
+                return []
+
+            case x86_ast.Instr(
+                instr,
+                [
+                    x86_ast.Deref() as arg_0,
+                    x86_ast.Deref() as arg_1,
+                ],
+            ):
+                return [
+                    x86_ast.Instr("movq", [arg_0, x86_ast.Reg("rax")]),
+                    x86_ast.Instr(instr, [x86_ast.Reg("rax"), arg_1]),
+                ]
+
+            case _:
+                return [i]
+
+    def patch_instructions(self, p: x86_ast.X86Program) -> x86_ast.X86Program:
+        assert isinstance(p.body, dict)
+
+        def _transform_instr(instr: x86_ast.instr) -> list[x86_ast.instr]:
+            match instr:
+                case x86_ast.Instr(_, [_, _]):
+                    return self.patch_instr(instr)
+                case _:
+                    return [instr]
+
+        new_body = {
+            label: [i for instr in block for i in _transform_instr(instr)]
+            for label, block in p.body.items()
+        }
+
+        p.body = new_body
+        return p
+
+    ###########################################################################
+    # Prelude & Conclusion
+    ###########################################################################
+
+    def prelude_and_conclusion(self, p: x86_ast.X86Program) -> x86_ast.X86Program:
+        assert p.spilled_count is not None
+        assert p.used_callee is not None
+        assert isinstance(p.body, dict)
+
+        # we consider the total stack locations used for alignment
+        # (including callee saved registers pushed on the stack)
+        total_used = p.spilled_count + len(p.used_callee)
+        # align frame size to 16 bytes
+        frame_size = (total_used if total_used % 2 == 0 else total_used + 1) - len(
+            # subtract callee saved registers after alignment
+            p.used_callee
+        )
+
+        p.body[utils.label_name("main")] = [
+            x86_ast.Instr("pushq", [x86_ast.Reg("rbp")]),
+            x86_ast.Instr("movq", [x86_ast.Reg("rsp"), x86_ast.Reg("rbp")]),
+            x86_ast.Instr(
+                "subq", [x86_ast.Immediate(frame_size * 8), x86_ast.Reg("rsp")]
+            ),
+            *(x86_ast.Instr("pushq", [r]) for r in p.used_callee),
+            x86_ast.Jump(utils.label_name("start")),
+        ]
+
+        p.body[utils.label_name("conclusion")] = [
+            *(x86_ast.Instr("popq", [r]) for r in p.used_callee),
+            x86_ast.Instr(
+                "addq", [x86_ast.Immediate(frame_size * 8), x86_ast.Reg("rsp")]
+            ),
+            x86_ast.Instr("popq", [x86_ast.Reg("rbp")]),
+            x86_ast.Instr("retq", []),
+        ]
+
+        p = self.remove_jumps(p)
+
+        return p

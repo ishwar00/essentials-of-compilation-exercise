@@ -31,7 +31,6 @@
               ]))
             gcc
             graphviz
-            nodePackages.pyright
           ];
           shellHook = ''
             export PYTHONPATH="$(realpath .):$(realpath ./interp_x86)"

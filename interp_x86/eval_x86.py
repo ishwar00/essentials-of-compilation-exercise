@@ -235,6 +235,7 @@ class X86Emulator:
                 a1, a2 = instr.children
                 v = self.eval_arg(a1)
                 self.store_arg(a2, v)
+                import sys
 
             elif instr.data == 'addq':
                 a1, a2 = instr.children

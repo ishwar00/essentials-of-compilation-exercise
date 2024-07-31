@@ -1336,7 +1336,21 @@ def test_pass(passname, interp_dict, program_root, ast, compiler_name):
         stdout = sys.stdout
         sys.stdin = open(input_file, "r")
         sys.stdout = open(output_file, "w")
-        interp_dict[passname](ast)
+        try:
+            interp_dict[passname](ast)
+        except Exception:
+            print(
+                "compiler "
+                + compiler_name
+                + " failed pass "
+                + passname
+                + " on test:\n"
+                + program_root
+                + "\n",
+                file=sys.stderr
+            )
+            print(ast, file=sys.stderr)
+            raise
         print()  # print a newline to make diff happy
         sys.stdin = stdin
         sys.stdout = stdout

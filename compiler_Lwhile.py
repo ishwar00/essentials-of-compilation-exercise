@@ -100,6 +100,10 @@ class Compiler:
                 body = [self._shrink_stmt(s) for s in body]
                 orelse = [self._shrink_stmt(s) for s in orelse]
                 return ast.If(exp, body, orelse)
+            case ast.While(exp, body, _):
+                exp = self._shrink_exp(exp)
+                body = [self._shrink_stmt(s) for s in body]
+                return ast.While(exp, body, [])
             case _:
                 raise Exception(f"shrink: unexpected stmt: {s}")
 
@@ -379,15 +383,15 @@ class Compiler:
             case _:
                 raise Exception("explicate_control: invalid statement")
 
-    def explicate_control(self, p: ast.Module):
-        match p:
-            case ast.Module(body):
-                new_body = [ast.Return(ast.Constant(0))]
-                basic_blocks: dict[str, Sequence[ast.stmt]] = {}
-                for s in reversed(body):
-                    new_body = self.explicate_stmt(s, new_body, basic_blocks)
-                basic_blocks[utils.label_name("start")] = new_body
-                return utils.CProgram(basic_blocks)
+    # def explicate_control(self, p: ast.Module):
+    #     match p:
+    #         case ast.Module(body):
+    #             new_body = [ast.Return(ast.Constant(0))]
+    #             basic_blocks: dict[str, Sequence[ast.stmt]] = {}
+    #             for s in reversed(body):
+    #                 new_body = self.explicate_stmt(s, new_body, basic_blocks)
+    #             basic_blocks[utils.label_name("start")] = new_body
+    #             return utils.CProgram(basic_blocks)
 
     ### select instructions
 
@@ -507,15 +511,15 @@ class Compiler:
             case _:
                 raise Exception(f"Unsupported statement type: {s}")
 
-    def select_instructions(self, p: utils.CProgram) -> x86_ast.X86Program:
-        x86_blocks: dict[str, list[x86_ast.instr]] = {}
-
-        for label, stmts in p.body.items():
-            x86_blocks[label] = [
-                instr for stmt in stmts for instr in self.select_stmt(stmt)
-            ]
-
-        return x86_ast.X86Program(x86_blocks)
+    # def select_instructions(self, p: utils.CProgram) -> x86_ast.X86Program:
+    #     x86_blocks: dict[str, list[x86_ast.instr]] = {}
+    #
+    #     for label, stmts in p.body.items():
+    #         x86_blocks[label] = [
+    #             instr for stmt in stmts for instr in self.select_stmt(stmt)
+    #         ]
+    #
+    #     return x86_ast.X86Program(x86_blocks)
 
     def remove_jumps(self, p: x86_ast.X86Program) -> x86_ast.X86Program:
         jump_sources: dict[str, list[str]] = defaultdict(list)
@@ -877,32 +881,32 @@ class Compiler:
             case _:
                 raise Exception(f"invalid instruction: {i}")
 
-    def assign_homes(self, p: x86_ast.X86Program) -> x86_ast.X86Program:
-        live_after_set = self.uncover_live(p)
-        graph = self.build_interference(p, live_after_set)
-        move_graph = self.build_move_graph(p)
-        reg_allocation, spilled_count = self.allocate_registers(graph, move_graph)
-
-        assert isinstance(p.body, dict)
-
-        def _transform_instr(instr: x86_ast.instr) -> x86_ast.instr:
-            match instr:
-                case x86_ast.Instr():
-                    return self.assign_homes_instr(instr, reg_allocation)
-                case _:
-                    return instr
-
-        new_body = {
-            label: [_transform_instr(instr) for instr in block]
-            for label, block in p.body.items()
-        }
-
-        used_locations = set(reg_allocation.values())
-        used_callee = _callee_saved_registers & used_locations
-
-        return x86_ast.X86Program(
-            body=new_body, spilled_count=spilled_count, used_callee=used_callee
-        )
+    # def assign_homes(self, p: x86_ast.X86Program) -> x86_ast.X86Program:
+    #     live_after_set = self.uncover_live(p)
+    #     graph = self.build_interference(p, live_after_set)
+    #     move_graph = self.build_move_graph(p)
+    #     reg_allocation, spilled_count = self.allocate_registers(graph, move_graph)
+    #
+    #     assert isinstance(p.body, dict)
+    #
+    #     def _transform_instr(instr: x86_ast.instr) -> x86_ast.instr:
+    #         match instr:
+    #             case x86_ast.Instr():
+    #                 return self.assign_homes_instr(instr, reg_allocation)
+    #             case _:
+    #                 return instr
+    #
+    #     new_body = {
+    #         label: [_transform_instr(instr) for instr in block]
+    #         for label, block in p.body.items()
+    #     }
+    #
+    #     used_locations = set(reg_allocation.values())
+    #     used_callee = _callee_saved_registers & used_locations
+    #
+    #     return x86_ast.X86Program(
+    #         body=new_body, spilled_count=spilled_count, used_callee=used_callee
+    #     )
 
     def patch_instr(self, i: x86_ast.instr) -> list[x86_ast.instr]:
         match i:
@@ -951,61 +955,61 @@ class Compiler:
             case _:
                 return [i]
 
-    def patch_instructions(self, p: x86_ast.X86Program) -> x86_ast.X86Program:
-        assert isinstance(p.body, dict)
-
-        def _transform_instr(instr: x86_ast.instr) -> list[x86_ast.instr]:
-            match instr:
-                case x86_ast.Instr(_, [_, _]):
-                    return self.patch_instr(instr)
-                case _:
-                    return [instr]
-
-        new_body = {
-            label: [i for instr in block for i in _transform_instr(instr)]
-            for label, block in p.body.items()
-        }
-
-        p.body = new_body
-        return p
+    # def patch_instructions(self, p: x86_ast.X86Program) -> x86_ast.X86Program:
+    #     assert isinstance(p.body, dict)
+    #
+    #     def _transform_instr(instr: x86_ast.instr) -> list[x86_ast.instr]:
+    #         match instr:
+    #             case x86_ast.Instr(_, [_, _]):
+    #                 return self.patch_instr(instr)
+    #             case _:
+    #                 return [instr]
+    #
+    #     new_body = {
+    #         label: [i for instr in block for i in _transform_instr(instr)]
+    #         for label, block in p.body.items()
+    #     }
+    #
+    #     p.body = new_body
+    #     return p
 
     ###########################################################################
     # Prelude & Conclusion
     ###########################################################################
 
-    def prelude_and_conclusion(self, p: x86_ast.X86Program) -> x86_ast.X86Program:
-        assert p.spilled_count is not None
-        assert p.used_callee is not None
-        assert isinstance(p.body, dict)
-
-        # we consider the total stack locations used for alignment
-        # (including callee saved registers pushed on the stack)
-        total_used = p.spilled_count + len(p.used_callee)
-        # align frame size to 16 bytes
-        frame_size = (total_used if total_used % 2 == 0 else total_used + 1) - len(
-            # subtract callee saved registers after alignment
-            p.used_callee
-        )
-
-        p.body[utils.label_name("main")] = [
-            x86_ast.Instr("pushq", [x86_ast.Reg("rbp")]),
-            x86_ast.Instr("movq", [x86_ast.Reg("rsp"), x86_ast.Reg("rbp")]),
-            x86_ast.Instr(
-                "subq", [x86_ast.Immediate(frame_size * 8), x86_ast.Reg("rsp")]
-            ),
-            *(x86_ast.Instr("pushq", [r]) for r in p.used_callee),
-            x86_ast.Jump(utils.label_name("start")),
-        ]
-
-        p.body[utils.label_name("conclusion")] = [
-            *(x86_ast.Instr("popq", [r]) for r in p.used_callee),
-            x86_ast.Instr(
-                "addq", [x86_ast.Immediate(frame_size * 8), x86_ast.Reg("rsp")]
-            ),
-            x86_ast.Instr("popq", [x86_ast.Reg("rbp")]),
-            x86_ast.Instr("retq", []),
-        ]
-
-        p = self.remove_jumps(p)
-
-        return p
+    # def prelude_and_conclusion(self, p: x86_ast.X86Program) -> x86_ast.X86Program:
+    #     assert p.spilled_count is not None
+    #     assert p.used_callee is not None
+    #     assert isinstance(p.body, dict)
+    #
+    #     # we consider the total stack locations used for alignment
+    #     # (including callee saved registers pushed on the stack)
+    #     total_used = p.spilled_count + len(p.used_callee)
+    #     # align frame size to 16 bytes
+    #     frame_size = (total_used if total_used % 2 == 0 else total_used + 1) - len(
+    #         # subtract callee saved registers after alignment
+    #         p.used_callee
+    #     )
+    #
+    #     p.body[utils.label_name("main")] = [
+    #         x86_ast.Instr("pushq", [x86_ast.Reg("rbp")]),
+    #         x86_ast.Instr("movq", [x86_ast.Reg("rsp"), x86_ast.Reg("rbp")]),
+    #         x86_ast.Instr(
+    #             "subq", [x86_ast.Immediate(frame_size * 8), x86_ast.Reg("rsp")]
+    #         ),
+    #         *(x86_ast.Instr("pushq", [r]) for r in p.used_callee),
+    #         x86_ast.Jump(utils.label_name("start")),
+    #     ]
+    #
+    #     p.body[utils.label_name("conclusion")] = [
+    #         *(x86_ast.Instr("popq", [r]) for r in p.used_callee),
+    #         x86_ast.Instr(
+    #             "addq", [x86_ast.Immediate(frame_size * 8), x86_ast.Reg("rsp")]
+    #         ),
+    #         x86_ast.Instr("popq", [x86_ast.Reg("rbp")]),
+    #         x86_ast.Instr("retq", []),
+    #     ]
+    #
+    #     p = self.remove_jumps(p)
+    #
+    #     return p

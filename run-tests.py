@@ -4,7 +4,8 @@ import sys
 sys.path.append("../python-student-support-code")
 sys.path.append("../python-student-support-code/interp_x86")
 
-import compiler_Lif as compiler
+# import compiler_Lif as compiler
+import compiler_Lwhile as compiler
 
 # import interp_Lvar
 import interp_Lif
@@ -12,6 +13,7 @@ import type_check_Lif
 from utils import run_tests, run_one_test, enable_tracing
 from interp_x86.eval_x86 import interp_x86
 from interp_Cif import InterpCif
+
 
 
 # enable_tracing()

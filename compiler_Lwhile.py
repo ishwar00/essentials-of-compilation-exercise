@@ -386,6 +386,18 @@ class Compiler:
                 return self.explicate_pred(
                     test, compiled_body, compiled_orelse, basic_blocks
                 )
+            case ast.While(test, body, _):
+                compiled_body = self.create_block(
+                    [
+                        s
+                        for stmt in body[:-1]
+                        for s in self.explicate_stmt(stmt, [], basic_blocks)
+                    ]
+                    # the continuation needs to be passed only to the last statement
+                    + list(self.explicate_stmt(body[-1], cont, basic_blocks)),
+                    basic_blocks,
+                )
+                ...
             case _:
                 raise Exception("explicate_control: invalid statement")
 

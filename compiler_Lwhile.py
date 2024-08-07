@@ -387,6 +387,8 @@ class Compiler:
                     test, compiled_body, compiled_orelse, basic_blocks
                 )
             case ast.While(test, body, _):
+                test_block = self.create_block([test, utils.Goto()], basic_blocks)
+
                 compiled_body = self.create_block(
                     [
                         s

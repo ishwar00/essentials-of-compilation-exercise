@@ -229,8 +229,14 @@ class Compiler:
                 (simplified_cond, cond_temps) = self.rco_exp(test, False)
                 body = [s for stmt in body for s in self.rco_stmt(stmt)]
                 return [
-                    *[ast.Assign([var], value) for (var, value) in cond_temps],
-                    ast.While(simplified_cond, body, []),
+                    ast.While(
+                        utils.Begin(
+                            [ast.Assign([var], value) for (var, value) in cond_temps],
+                            simplified_cond,
+                        ),
+                        body,
+                        [],
+                    ),
                 ]
             case _:
                 raise Exception(f"rco_stmt: unexpected stmt: {s}")

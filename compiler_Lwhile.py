@@ -387,8 +387,6 @@ class Compiler:
                     test, compiled_body, compiled_orelse, basic_blocks
                 )
             case ast.While(test, body, _):
-                test_block = self.create_block([test, utils.Goto()], basic_blocks)
-
                 compiled_body = self.create_block(
                     [
                         s
@@ -396,22 +394,36 @@ class Compiler:
                         for s in self.explicate_stmt(stmt, [], basic_blocks)
                     ]
                     # the continuation needs to be passed only to the last statement
-                    + list(self.explicate_stmt(body[-1], cont, basic_blocks)),
+                    + list(self.explicate_stmt(body[-1], [], basic_blocks)),
                     basic_blocks,
                 )
-                ...
+                cont_goto = self.create_block(cont, basic_blocks)
+                condition_block = self.explicate_pred(
+                    test, compiled_body, cont_goto, basic_blocks
+                )
+                match (condition_block, compiled_body.force()):
+                    case ([utils.Goto(condition_label)], [utils.Goto(body_label)]):
+                        basic_blocks[body_label] = [
+                            *basic_blocks[body_label],
+                            utils.Goto(condition_label),
+                        ]
+                    case _:
+                        raise Exception(
+                            f"condition or body was not a goto. condition: {condition_block}. body: {compiled_body}"
+                        )
+                return condition_block
             case _:
                 raise Exception("explicate_control: invalid statement")
 
-    # def explicate_control(self, p: ast.Module):
-    #     match p:
-    #         case ast.Module(body):
-    #             new_body = [ast.Return(ast.Constant(0))]
-    #             basic_blocks: dict[str, Sequence[ast.stmt]] = {}
-    #             for s in reversed(body):
-    #                 new_body = self.explicate_stmt(s, new_body, basic_blocks)
-    #             basic_blocks[utils.label_name("start")] = new_body
-    #             return utils.CProgram(basic_blocks)
+    def explicate_control(self, p: ast.Module):
+        match p:
+            case ast.Module(body):
+                new_body = [ast.Return(ast.Constant(0))]
+                basic_blocks: dict[str, Sequence[ast.stmt]] = {}
+                for s in reversed(body):
+                    new_body = self.explicate_stmt(s, new_body, basic_blocks)
+                basic_blocks[utils.label_name("start")] = new_body
+                return utils.CProgram(basic_blocks)
 
     ### select instructions
 

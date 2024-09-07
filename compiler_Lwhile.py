@@ -4,8 +4,11 @@ from collections import defaultdict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
+from graphviz import backend
+
 import utils
 import x86_ast
+from dataflow_analysis import analyze_dataflow
 from graph import (DirectedAdjList, UndirectedAdjList, topological_sort,
                    transpose)
 
@@ -232,9 +235,9 @@ class Compiler:
                 test = simplified_cond
                 if len(cond_temps) > 0:
                     test = utils.Begin(
-                            [ast.Assign([var], value) for (var, value) in cond_temps],
-                            simplified_cond,
-                        )
+                        [ast.Assign([var], value) for (var, value) in cond_temps],
+                        simplified_cond,
+                    )
                 return [ast.While(test, body, [])]
             case _:
                 raise Exception(f"rco_stmt: unexpected stmt: {s}")
@@ -252,7 +255,8 @@ class Compiler:
         self,
         promise: Sequence[ast.stmt] | Promise,
         basic_blocks: dict[str, Sequence[ast.stmt]],
-        *, label_name: str | None = None
+        *,
+        label_name: str | None = None,
     ) -> Promise:
         def delay():
             stmts = force(promise)
@@ -260,7 +264,11 @@ class Compiler:
                 case [utils.Goto(_)]:
                     return stmts
                 case _:
-                    label = utils.label_name(utils.generate_name("block") if label_name is None else label_name)
+                    label = utils.label_name(
+                        utils.generate_name("block")
+                        if label_name is None
+                        else label_name
+                    )
                     basic_blocks[label] = stmts
                     return [utils.Goto(label)]
 
@@ -310,8 +318,8 @@ class Compiler:
         body: Sequence[ast.stmt] | Promise,
         orelse: Sequence[ast.stmt] | Promise,
         basic_blocks: dict[str, Sequence[ast.stmt]],
-        *, 
-        label_name: str | None = None
+        *,
+        label_name: str | None = None,
     ) -> Sequence[ast.stmt]:
         match cond:
             case ast.Compare() | ast.UnaryOp(ast.Not()) | ast.Name():
@@ -333,7 +341,7 @@ class Compiler:
                         *self.explicate_pred(result, body, orelse, basic_blocks),
                     ],
                     basic_blocks,
-                    label_name=label_name
+                    label_name=label_name,
                 ).force()
             case ast.IfExp(condition, cond_body, cond_orelse):
                 body = self.create_block(body, basic_blocks)
@@ -345,8 +353,11 @@ class Compiler:
                 )
 
                 return self.explicate_pred(
-                    condition, cond_body, cond_orelse, basic_blocks, 
-                    label_name=label_name
+                    condition,
+                    cond_body,
+                    cond_orelse,
+                    basic_blocks,
+                    label_name=label_name,
                 )
             case ast.Constant(True):
                 return force(body)
@@ -368,23 +379,11 @@ class Compiler:
                 return self.explicate_effect(expr, cont, basic_blocks)
             case ast.If(test, body, orelse):
                 compiled_body = self.create_block(
-                    [
-                        s
-                        for stmt in body[:-1]
-                        for s in self.explicate_stmt(stmt, [], basic_blocks)
-                    ]
-                    # the continuation needs to be passed only to the last statement
-                    + list(self.explicate_stmt(body[-1], cont, basic_blocks)),
+                    self.backlink_instructions(body, cont, basic_blocks),
                     basic_blocks,
                 )
                 compiled_orelse = self.create_block(
-                    [
-                        s
-                        for stmt in orelse[:-1]
-                        for s in self.explicate_stmt(stmt, [], basic_blocks)
-                    ]
-                    # the continuation needs to be passed only to the last statement
-                    + list(self.explicate_stmt(orelse[-1], cont, basic_blocks)),
+                    self.backlink_instructions(orelse, cont, basic_blocks),
                     basic_blocks,
                 )
                 return self.explicate_pred(
@@ -392,32 +391,41 @@ class Compiler:
                 )
             case ast.While(test, body, _):
                 # TODO: add a test containing nested ifs
-                condition_label = utils.generate_name('block')
+                condition_label = utils.generate_name("block")
                 compiled_body = self.create_block(
-                    [
-                        s
-                        for stmt in body[:-1]
-                        for s in self.explicate_stmt(stmt, [], basic_blocks)
-                    ]
-                    + list(self.explicate_stmt(body[-1], [utils.Goto(utils.label_name(condition_label))], basic_blocks)),
+                    self.backlink_instructions(body, [utils.Goto(utils.label_name(condition_label))], basic_blocks),
                     basic_blocks,
                 )
                 cont_goto = self.create_block(cont, basic_blocks)
                 condition_block = self.explicate_pred(
-                    test, compiled_body, cont_goto, basic_blocks, label_name=condition_label
+                    test,
+                    compiled_body,
+                    cont_goto,
+                    basic_blocks,
+                    label_name=condition_label,
                 )
                 return condition_block
             case _:
                 raise Exception("explicate_control: invalid statement")
 
+    def backlink_instructions(
+        self,
+        body: list[ast.stmt],
+        initial_cont: Sequence[ast.stmt],
+        basic_blocks: dict[str, Sequence[ast.stmt]],
+    ) -> Sequence[ast.stmt]:
+        new_body = initial_cont
+        for s in reversed(body):
+            new_body = self.explicate_stmt(s, new_body, basic_blocks)
+        return new_body
+
     def explicate_control(self, p: ast.Module):
         match p:
             case ast.Module(body):
-                new_body = [ast.Return(ast.Constant(0))]
                 basic_blocks: dict[str, Sequence[ast.stmt]] = {}
-                for s in reversed(body):
-                    new_body = self.explicate_stmt(s, new_body, basic_blocks)
-                basic_blocks[utils.label_name("start")] = new_body
+                basic_blocks[utils.label_name("start")] = self.backlink_instructions(
+                    body, [ast.Return(value=ast.Constant(value=0))], basic_blocks
+                )
                 return utils.CProgram(basic_blocks)
 
     ### select instructions
@@ -538,15 +546,15 @@ class Compiler:
             case _:
                 raise Exception(f"Unsupported statement type: {s}")
 
-    # def select_instructions(self, p: utils.CProgram) -> x86_ast.X86Program:
-    #     x86_blocks: dict[str, list[x86_ast.instr]] = {}
-    #
-    #     for label, stmts in p.body.items():
-    #         x86_blocks[label] = [
-    #             instr for stmt in stmts for instr in self.select_stmt(stmt)
-    #         ]
-    #
-    #     return x86_ast.X86Program(x86_blocks)
+    def select_instructions(self, p: utils.CProgram) -> x86_ast.X86Program:
+        x86_blocks: dict[str, list[x86_ast.instr]] = {}
+
+        for label, stmts in p.body.items():
+            x86_blocks[label] = [
+                instr for stmt in stmts for instr in self.select_stmt(stmt)
+            ]
+
+        return x86_ast.X86Program(x86_blocks)
 
     def remove_jumps(self, p: x86_ast.X86Program) -> x86_ast.X86Program:
         jump_sources: dict[str, list[str]] = defaultdict(list)
@@ -681,27 +689,38 @@ class Compiler:
     def uncover_live(
         self, program: x86_ast.X86Program
     ) -> dict[str, dict[x86_ast.instr, set[x86_ast.location]]]:
-        assert isinstance(program.body, dict)
+        live_after_sets: dict[str, dict[x86_ast.instr, set[x86_ast.location]]] = {}
+
+        def transfer(label: str, live_after_set: set[x86_ast.location]):
+            if label == utils.label_name("conclusion"):
+                return set()
+
+            assert isinstance(program.body, dict)
+            block = program.body[label]
+
+            next_after_set = live_after_set
+            live_after_sets[label] = {block[-1]: live_after_set}
+            for instr, next_instr in zip(reversed(block[:-1]), reversed(block)):
+                match instr:
+                    case x86_ast.Jump(_) | x86_ast.JumpIf(_, _):
+                        live_after_sets[label][instr] = live_after_set
+                    case _:
+                        next_before_set = (
+                            next_after_set - self.write_vars(next_instr)
+                        ) | self.read_vars(next_instr)
+                        live_after_sets[label][instr] = next_before_set
+                next_after_set = live_after_sets[label][instr]
+
+            first_instr = block[0]
+            live_before_first_instr = (
+                next_after_set - self.write_vars(first_instr)
+            ) | self.read_vars(first_instr)
+
+            return live_before_first_instr
 
         cfg = self._build_control_flow_graph(program)
         cfg = transpose(cfg)
-        blocks = topological_sort(cfg)
-
-        live_after_sets: dict[str, dict[x86_ast.instr, set[x86_ast.location]]] = {}
-        live_before_block: dict[str, set[x86_ast.location]] = {}
-
-        for label in blocks:
-            if label == utils.label_name("conclusion"):
-                live_after_sets[label] = {}
-                live_before_block[label] = set()
-            else:
-                block = program.body[label]
-                live_after_set = self.uncover_live_in_block(
-                    label, block, live_before_block
-                )
-                live_after_sets[label] = live_after_set
-        # breakpoint()
-
+        analyze_dataflow(cfg, transfer, set(), set.union)
         return live_after_sets
 
     @staticmethod
@@ -908,32 +927,32 @@ class Compiler:
             case _:
                 raise Exception(f"invalid instruction: {i}")
 
-    # def assign_homes(self, p: x86_ast.X86Program) -> x86_ast.X86Program:
-    #     live_after_set = self.uncover_live(p)
-    #     graph = self.build_interference(p, live_after_set)
-    #     move_graph = self.build_move_graph(p)
-    #     reg_allocation, spilled_count = self.allocate_registers(graph, move_graph)
-    #
-    #     assert isinstance(p.body, dict)
-    #
-    #     def _transform_instr(instr: x86_ast.instr) -> x86_ast.instr:
-    #         match instr:
-    #             case x86_ast.Instr():
-    #                 return self.assign_homes_instr(instr, reg_allocation)
-    #             case _:
-    #                 return instr
-    #
-    #     new_body = {
-    #         label: [_transform_instr(instr) for instr in block]
-    #         for label, block in p.body.items()
-    #     }
-    #
-    #     used_locations = set(reg_allocation.values())
-    #     used_callee = _callee_saved_registers & used_locations
-    #
-    #     return x86_ast.X86Program(
-    #         body=new_body, spilled_count=spilled_count, used_callee=used_callee
-    #     )
+    def assign_homes(self, p: x86_ast.X86Program) -> x86_ast.X86Program:
+        live_after_set = self.uncover_live(p)
+        graph = self.build_interference(p, live_after_set)
+        move_graph = self.build_move_graph(p)
+        reg_allocation, spilled_count = self.allocate_registers(graph, move_graph)
+
+        assert isinstance(p.body, dict)
+
+        def _transform_instr(instr: x86_ast.instr) -> x86_ast.instr:
+            match instr:
+                case x86_ast.Instr():
+                    return self.assign_homes_instr(instr, reg_allocation)
+                case _:
+                    return instr
+
+        new_body = {
+            label: [_transform_instr(instr) for instr in block]
+            for label, block in p.body.items()
+        }
+
+        used_locations = set(reg_allocation.values())
+        used_callee = _callee_saved_registers & used_locations
+
+        return x86_ast.X86Program(
+            body=new_body, spilled_count=spilled_count, used_callee=used_callee
+        )
 
     def patch_instr(self, i: x86_ast.instr) -> list[x86_ast.instr]:
         match i:
@@ -982,61 +1001,61 @@ class Compiler:
             case _:
                 return [i]
 
-    # def patch_instructions(self, p: x86_ast.X86Program) -> x86_ast.X86Program:
-    #     assert isinstance(p.body, dict)
-    #
-    #     def _transform_instr(instr: x86_ast.instr) -> list[x86_ast.instr]:
-    #         match instr:
-    #             case x86_ast.Instr(_, [_, _]):
-    #                 return self.patch_instr(instr)
-    #             case _:
-    #                 return [instr]
-    #
-    #     new_body = {
-    #         label: [i for instr in block for i in _transform_instr(instr)]
-    #         for label, block in p.body.items()
-    #     }
-    #
-    #     p.body = new_body
-    #     return p
+    def patch_instructions(self, p: x86_ast.X86Program) -> x86_ast.X86Program:
+        assert isinstance(p.body, dict)
+
+        def _transform_instr(instr: x86_ast.instr) -> list[x86_ast.instr]:
+            match instr:
+                case x86_ast.Instr(_, [_, _]):
+                    return self.patch_instr(instr)
+                case _:
+                    return [instr]
+
+        new_body = {
+            label: [i for instr in block for i in _transform_instr(instr)]
+            for label, block in p.body.items()
+        }
+
+        p.body = new_body
+        return p
 
     ###########################################################################
     # Prelude & Conclusion
     ###########################################################################
 
-    # def prelude_and_conclusion(self, p: x86_ast.X86Program) -> x86_ast.X86Program:
-    #     assert p.spilled_count is not None
-    #     assert p.used_callee is not None
-    #     assert isinstance(p.body, dict)
-    #
-    #     # we consider the total stack locations used for alignment
-    #     # (including callee saved registers pushed on the stack)
-    #     total_used = p.spilled_count + len(p.used_callee)
-    #     # align frame size to 16 bytes
-    #     frame_size = (total_used if total_used % 2 == 0 else total_used + 1) - len(
-    #         # subtract callee saved registers after alignment
-    #         p.used_callee
-    #     )
-    #
-    #     p.body[utils.label_name("main")] = [
-    #         x86_ast.Instr("pushq", [x86_ast.Reg("rbp")]),
-    #         x86_ast.Instr("movq", [x86_ast.Reg("rsp"), x86_ast.Reg("rbp")]),
-    #         x86_ast.Instr(
-    #             "subq", [x86_ast.Immediate(frame_size * 8), x86_ast.Reg("rsp")]
-    #         ),
-    #         *(x86_ast.Instr("pushq", [r]) for r in p.used_callee),
-    #         x86_ast.Jump(utils.label_name("start")),
-    #     ]
-    #
-    #     p.body[utils.label_name("conclusion")] = [
-    #         *(x86_ast.Instr("popq", [r]) for r in p.used_callee),
-    #         x86_ast.Instr(
-    #             "addq", [x86_ast.Immediate(frame_size * 8), x86_ast.Reg("rsp")]
-    #         ),
-    #         x86_ast.Instr("popq", [x86_ast.Reg("rbp")]),
-    #         x86_ast.Instr("retq", []),
-    #     ]
-    #
-    #     p = self.remove_jumps(p)
-    #
-    #     return p
+    def prelude_and_conclusion(self, p: x86_ast.X86Program) -> x86_ast.X86Program:
+        assert p.spilled_count is not None
+        assert p.used_callee is not None
+        assert isinstance(p.body, dict)
+
+        # we consider the total stack locations used for alignment
+        # (including callee saved registers pushed on the stack)
+        total_used = p.spilled_count + len(p.used_callee)
+        # align frame size to 16 bytes
+        frame_size = (total_used if total_used % 2 == 0 else total_used + 1) - len(
+            # subtract callee saved registers after alignment
+            p.used_callee
+        )
+
+        p.body[utils.label_name("main")] = [
+            x86_ast.Instr("pushq", [x86_ast.Reg("rbp")]),
+            x86_ast.Instr("movq", [x86_ast.Reg("rsp"), x86_ast.Reg("rbp")]),
+            x86_ast.Instr(
+                "subq", [x86_ast.Immediate(frame_size * 8), x86_ast.Reg("rsp")]
+            ),
+            *(x86_ast.Instr("pushq", [r]) for r in p.used_callee),
+            x86_ast.Jump(utils.label_name("start")),
+        ]
+
+        p.body[utils.label_name("conclusion")] = [
+            *(x86_ast.Instr("popq", [r]) for r in p.used_callee),
+            x86_ast.Instr(
+                "addq", [x86_ast.Immediate(frame_size * 8), x86_ast.Reg("rsp")]
+            ),
+            x86_ast.Instr("popq", [x86_ast.Reg("rbp")]),
+            x86_ast.Instr("retq", []),
+        ]
+
+        p = self.remove_jumps(p)
+
+        return p

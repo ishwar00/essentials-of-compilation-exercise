@@ -24,6 +24,8 @@
             (python312.withPackages (ps:
               with ps; [
                 graphviz
+
+                # dev tools
                 black
 
                 # debugger
@@ -31,6 +33,9 @@
               ]))
             gcc
             graphviz
+
+            # linter
+            ruff-lsp
           ];
           shellHook = ''
             export PYTHONPATH="$(realpath .):$(realpath ./interp_x86)"

@@ -25,17 +25,14 @@
               with ps; [
                 graphviz
 
-                # dev tools
-                black
-
                 # debugger
                 pudb
               ]))
             gcc
             graphviz
 
-            # linter
-            ruff-lsp
+            # linter and formatter
+            ruff
           ];
           shellHook = ''
             export PYTHONPATH="$(realpath .):$(realpath ./interp_x86)"

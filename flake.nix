@@ -33,6 +33,9 @@
 
             # linter and formatter
             ruff
+
+            # spell and grammar check
+            harper
           ];
           shellHook = ''
             export PYTHONPATH="$(realpath .):$(realpath ./interp_x86)"

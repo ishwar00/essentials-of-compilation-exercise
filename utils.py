@@ -1,9 +1,9 @@
+import ast
 import os
 import sys
-from sys import platform
-import ast
 from ast import *
 from dataclasses import dataclass
+from sys import platform
 from typing import Sequence
 
 # move these to the compilers, use a method with overrides -Jeremy
@@ -725,7 +725,7 @@ def generate_name(name):
 ################################################################################
 
 
-class Type:
+class Type(ast.expr):
     pass
 
 
@@ -1347,7 +1347,7 @@ def test_pass(passname, interp_dict, program_root, ast, compiler_name):
                 + " on test:\n"
                 + program_root
                 + "\n",
-                file=sys.stderr
+                file=sys.stderr,
             )
             print(ast, file=sys.stderr)
             raise

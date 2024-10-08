@@ -61,6 +61,9 @@ if True:
     # run_tests("if", compiler, "if", typecheck_dict, interp_dict)
     # run_tests("while", compiler, "while", typecheck_dict, interp_dict)
     run_tests("tup", compiler, "tup", typecheck_dict, interp_dict)
+    run_tests("var", compiler, "tup", typecheck_dict, interp_dict)
+    run_tests("if", compiler, "tup", typecheck_dict, interp_dict)
+    run_tests("while", compiler, "tup", typecheck_dict, interp_dict)
 else:
     run_one_test(
         os.getcwd() + "/tests/var/zero.py",

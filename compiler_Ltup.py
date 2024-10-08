@@ -86,10 +86,7 @@ def global_value_of(name: str) -> ast.Call:
 
 
 class Compiler:
-    def expose_expr_allocation(self, tup: ast.expr) -> ast.expr:
-        if not isinstance(tup, ast.Tuple):
-            return tup
-
+    def expose_tuple_allocation(self, tup: ast.Tuple) -> ast.expr:
         init_vars = [ast.Name(utils.generate_name("init")) for _ in tup.elts]
         eval_elements = [
             ast.Assign(
@@ -123,7 +120,9 @@ class Compiler:
         )
 
         init_elements = [
-            ast.Assign([ast.Subscript(alloc_var, ast.Constant(index))], init_var)
+            ast.Assign(
+                [ast.Subscript(alloc_var, ast.Constant(index), ast.Store())], init_var
+            )
             for (index, init_var) in enumerate(init_vars)
         ]
 
@@ -131,20 +130,94 @@ class Compiler:
             [*eval_elements, check_and_maybe_collect, alloc, *init_elements], alloc_var
         )
 
+    def expose_expr_allocation(self, expr: ast.expr) -> ast.expr:
+        match expr:
+            case ast.Tuple():
+                return self.expose_tuple_allocation(expr)
+            case ast.UnaryOp(op, condition):
+                return ast.UnaryOp(op, self.expose_expr_allocation(condition))
+            case ast.BinOp(left, op, right):
+                return ast.BinOp(
+                    self.expose_expr_allocation(left),
+                    op,
+                    self.expose_expr_allocation(right),
+                )
+            case ast.Compare(left, [op], [right]):
+                return ast.Compare(
+                    self.expose_expr_allocation(left),
+                    [op],
+                    [self.expose_expr_allocation(right)],
+                )
+            case ast.IfExp(condition, body, orelse):
+                return ast.IfExp(
+                    self.expose_expr_allocation(condition),
+                    self.expose_expr_allocation(body),
+                    self.expose_expr_allocation(orelse),
+                )
+            case ast.Subscript(value, index, ctx):
+                return ast.Subscript(
+                    self.expose_expr_allocation(value),
+                    self.expose_expr_allocation(index),
+                    ctx,
+                )
+            case ast.Call(ast.Name("len"), [exp]):
+                return ast.Call(ast.Name("len"), [self.expose_expr_allocation(exp)], [])
+            case ast.Call(ast.Name("print"), [exp]):
+                return ast.Call(
+                    ast.Name("print"), [self.expose_expr_allocation(exp)], []
+                )
+            case (
+                ast.Constant()
+                | ast.Name()
+                | utils.GlobalValue()
+                | ast.Call(ast.Name("input_int"), [])
+                | utils.Allocate()
+            ):
+                return expr
+            case _:
+                raise Exception(f"Unknown expr for expose_allocation: {expr}")
+
+    def expose_stmt_allocation(self, stmt: ast.stmt) -> ast.stmt:
+        match stmt:
+            case ast.Expr(expr):
+                tup = self.expose_expr_allocation(expr)
+                return ast.Expr(tup)
+            case ast.Assign([ast.Subscript(value, index, ctx)], exp):
+                raise Exception("but why")
+                return ast.Assign(
+                    [
+                        ast.Subscript(
+                            self.expose_expr_allocation(value),
+                            self.expose_expr_allocation(index),
+                            ctx,
+                        )
+                    ],
+                    self.expose_expr_allocation(exp),
+                )
+            case ast.Assign(targets, expr):
+                tup = self.expose_expr_allocation(expr)
+                return ast.Assign(targets, tup)
+            case ast.If(test, body, orelse):
+                return ast.If(
+                    self.expose_expr_allocation(test),
+                    [self.expose_stmt_allocation(stmt) for stmt in body],
+                    [self.expose_stmt_allocation(stmt) for stmt in orelse],
+                )
+            case ast.While(test, body, orelse):
+                return ast.While(
+                    self.expose_expr_allocation(test),
+                    [self.expose_stmt_allocation(stmt) for stmt in body],
+                    orelse,
+                )
+            case _:
+                return stmt
+
     def expose_allocation(self, p: ast.Module) -> ast.Module:
         body = p.body
         new_body: list[ast.stmt] = []
 
         for stmt in body:
-            match stmt:
-                case ast.Expr(ast.Tuple(_) as tup):
-                    tup = self.expose_expr_allocation(tup)
-                    new_body.append(ast.Expr(tup))
-                case ast.Assign(targets, ast.Tuple(_) as tup):
-                    tup = self.expose_expr_allocation(tup)
-                    new_body.append(ast.Assign(targets, tup))
-                case _:
-                    new_body.append(stmt)
+            new_body.append(self.expose_stmt_allocation(stmt))
 
         p.body = new_body
         return p
@@ -159,6 +232,9 @@ class Compiler:
                 e1 = self._shrink_exp(e1)
                 e2 = self._shrink_exp(e2)
                 return ast.IfExp(e1, ast.Constant(True), e2)
+            case ast.Tuple(elts):
+                e.elts = [self._shrink_exp(element) for element in elts]
+                return e
             case _:
                 return e
 
@@ -184,11 +260,11 @@ class Compiler:
             case _:
                 raise Exception(f"shrink: unexpected stmt: {s}")
 
-    # def shrink(self, p: ast.Module) -> ast.Module:
-    #     match p:
-    #         case ast.Module(ss):
-    #             sss = [self._shrink_stmt(s) for s in ss]
-    #             return ast.Module(sss, [])
+    def shrink(self, p: ast.Module) -> ast.Module:
+        match p:
+            case ast.Module(ss):
+                sss = [self._shrink_stmt(s) for s in ss]
+                return ast.Module(sss, [])
 
     def rco_exp(self, e: ast.expr, need_atomic: bool) -> tuple[ast.expr, Temporaries]:
         match e:
@@ -196,6 +272,8 @@ class Compiler:
                 return ast.Constant(v), []
             case ast.Name(var):
                 return ast.Name(var), []
+            case utils.GlobalValue():
+                return e, []
             case ast.Call(ast.Name("input_int"), []):
                 if need_atomic:
                     tmp = utils.generate_name("tmp")
@@ -213,9 +291,9 @@ class Compiler:
                         [*temps, (ast.Name(tmp), ast.UnaryOp(ast.USub(), atm))],
                     )
                 return (ast.UnaryOp(op, atm), temps)
-            case ast.BinOp(exp1, op, exp2):
-                (atm1, temps1) = self.rco_exp(exp1, True)
-                (atm2, temps2) = self.rco_exp(exp2, True)
+            case ast.BinOp(left, op, right):
+                (left_atm, temps1) = self.rco_exp(left, True)
+                (right_atm, temps2) = self.rco_exp(right, True)
                 if need_atomic:
                     tmp = utils.generate_name("tmp")
                     return (
@@ -223,14 +301,14 @@ class Compiler:
                         [
                             *temps1,
                             *temps2,
-                            (ast.Name(tmp), ast.BinOp(atm1, op, atm2)),
+                            (ast.Name(tmp), ast.BinOp(left_atm, op, right_atm)),
                         ],
                     )
 
-                return (ast.BinOp(atm1, op, atm2), [*temps1, *temps2])
-            case ast.Compare(exp1, [op], [exp2]):
-                (atm1, temps1) = self.rco_exp(exp1, True)
-                (atm2, temps2) = self.rco_exp(exp2, True)
+                return (ast.BinOp(left_atm, op, right_atm), [*temps1, *temps2])
+            case ast.Compare(left, [op], [right]):
+                (left_atm, temps1) = self.rco_exp(left, True)
+                (right_atm, temps2) = self.rco_exp(right, True)
                 if need_atomic:
                     tmp = utils.generate_name("tmp")
                     return (
@@ -238,11 +316,11 @@ class Compiler:
                         [
                             *temps1,
                             *temps2,
-                            (ast.Name(tmp), ast.Compare(atm1, [op], [atm2])),
+                            (ast.Name(tmp), ast.Compare(left_atm, [op], [right_atm])),
                         ],
                     )
 
-                return (ast.Compare(atm1, [op], [atm2]), [*temps1, *temps2])
+                return (ast.Compare(left_atm, [op], [right_atm]), [*temps1, *temps2])
             case ast.IfExp(condition, body, orelse):
                 (simplified_cond, cond_temps) = self.rco_exp(condition, False)
 
@@ -274,6 +352,58 @@ class Compiler:
                     )
 
                 return ast.IfExp(simplified_cond, body_expr, orelse_expr), cond_temps
+            case ast.Subscript(value, index, ctx):
+                (rco_value, value_tmps) = self.rco_exp(value, True)
+                (rco_index, index_tmps) = self.rco_exp(index, True)
+                if need_atomic:
+                    tmp = utils.generate_name("tmp")
+                    return (
+                        ast.Name(tmp),
+                        [
+                            *value_tmps,
+                            *index_tmps,
+                            (ast.Name(tmp), ast.Subscript(rco_value, rco_index, ctx)),
+                        ],
+                    )
+                return ast.Subscript(rco_value, rco_index, ctx), [
+                    *value_tmps,
+                    *index_tmps,
+                ]
+            case ast.Call(ast.Name("len"), [exp]):
+                rco_exp, exp_tmps = self.rco_exp(exp, True)
+                if need_atomic:
+                    tmp = utils.generate_name("tmp")
+                    return (
+                        ast.Name(tmp),
+                        [
+                            *exp_tmps,
+                            (
+                                ast.Name(tmp),
+                                ast.Call(ast.Name("len"), [rco_exp], keywords=[]),
+                            ),
+                        ],
+                    )
+
+                return ast.Call(ast.Name("len"), [rco_exp], keywords=[]), exp_tmps
+            case utils.Allocate() as allocate:
+                return allocate, []
+            case utils.Begin(body, result):
+                rco_result, result_tmps = self.rco_exp(result, True)
+                new_body = [s for stmt in body for s in self.rco_stmt(stmt)] + [
+                    ast.Assign([tmp], value) for tmp, value in result_tmps
+                ]
+                if need_atomic:
+                    tmp = utils.generate_name("tmp")
+                    return (
+                        ast.Name(tmp),
+                        [
+                            (
+                                ast.Name(tmp),
+                                utils.Begin(new_body, rco_result),
+                            ),
+                        ],
+                    )
+                return utils.Begin(new_body, rco_result), []
             case _:
                 raise Exception(f"rco_exp: unexpected value: {e}")
 
@@ -289,6 +419,14 @@ class Compiler:
                 return [ast.Assign([var], value) for (var, value) in temps] + [
                     ast.Expr(atm)
                 ]
+            case ast.Assign([ast.Subscript(value, index, ctx)], exp):
+                (rco_value, value_tmps) = self.rco_exp(value, True)
+                (rco_index, index_tmps) = self.rco_exp(index, True)
+                (rco_exp, exp_tmps) = self.rco_exp(exp, False)
+                return [
+                    ast.Assign([var], value)
+                    for (var, value) in [*value_tmps, *index_tmps, *exp_tmps]
+                ] + [ast.Assign([ast.Subscript(rco_value, rco_index, ctx)], rco_exp)]
             case ast.Assign([ast.Name(var)], exp):
                 (atm, temps) = self.rco_exp(exp, True)
                 return [ast.Assign([var], value) for (var, value) in temps] + [
@@ -312,15 +450,17 @@ class Compiler:
                         simplified_cond,
                     )
                 return [ast.While(test, body, [])]
+            case utils.Collect():
+                return [s]
             case _:
                 raise Exception(f"rco_stmt: unexpected stmt: {s}")
 
-    # def remove_complex_operands(self, p: ast.Module) -> ast.Module:
-    #     match p:
-    #         case ast.Module(ss):
-    #             sss = [stmt for s in ss for stmt in self.rco_stmt(s)]
-    #             return ast.Module(sss, [])
-    #     raise Exception("remove_complex_operands not implemented")
+    def remove_complex_operands(self, p: ast.Module) -> ast.Module:
+        match p:
+            case ast.Module(ss):
+                sss = [stmt for s in ss for stmt in self.rco_stmt(s)]
+                return ast.Module(sss, [])
+        raise Exception("remove_complex_operands not implemented")
 
     ##### explicate control
 

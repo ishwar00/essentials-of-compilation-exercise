@@ -235,6 +235,11 @@ class Compiler:
             case ast.Tuple(elts):
                 e.elts = [self._shrink_exp(element) for element in elts]
                 return e
+            case ast.IfExp(test, body, orelse):
+                test = self._shrink_exp(test)
+                body = self._shrink_exp(body)
+                orelse = self._shrink_exp(orelse)
+                return ast.IfExp(test, body, orelse)
             case _:
                 return e
 

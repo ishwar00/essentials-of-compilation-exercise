@@ -355,20 +355,15 @@ class Compiler:
             case ast.Subscript(value, index, ctx):
                 (rco_value, value_tmps) = self.rco_exp(value, True)
                 (rco_index, index_tmps) = self.rco_exp(index, True)
-                if need_atomic:
-                    tmp = utils.generate_name("tmp")
-                    return (
-                        ast.Name(tmp),
-                        [
-                            *value_tmps,
-                            *index_tmps,
-                            (ast.Name(tmp), ast.Subscript(rco_value, rco_index, ctx)),
-                        ],
-                    )
-                return ast.Subscript(rco_value, rco_index, ctx), [
-                    *value_tmps,
-                    *index_tmps,
-                ]
+                tmp = utils.generate_name("tmp")
+                return (
+                    ast.Name(tmp),
+                    [
+                        *value_tmps,
+                        *index_tmps,
+                        (ast.Name(tmp), ast.Subscript(rco_value, rco_index, ctx)),
+                    ],
+                )
             case ast.Call(ast.Name("len"), [exp]):
                 rco_exp, exp_tmps = self.rco_exp(exp, True)
                 if need_atomic:
@@ -510,7 +505,7 @@ class Compiler:
 
     def explicate_assign(
         self,
-        left: ast.Name,
+        left: ast.Name | ast.Subscript,
         exp: ast.expr,
         cont: Sequence[ast.stmt],
         basic_blocks: dict[str, Sequence[ast.stmt]],
@@ -521,7 +516,9 @@ class Compiler:
                 orelse = self.explicate_assign(left, orelse, cont, basic_blocks)
                 return self.explicate_pred(condition, body, orelse, basic_blocks)
             case utils.Begin(stmts, result):
-                return [*stmts, ast.Assign([left], result), *cont]
+                return self.backlink_instructions(
+                    stmts, [ast.Assign([left], result), *cont], basic_blocks
+                )
             case _:
                 return [ast.Assign([left], exp), *cont]
 
@@ -586,10 +583,12 @@ class Compiler:
         basic_blocks: dict[str, Sequence[ast.stmt]],
     ) -> Sequence[ast.stmt]:
         match statement:
-            case ast.Assign([ast.Name(_) as var], exp):
+            case ast.Assign([ast.Name(_) | ast.Subscript() as var], exp):
                 return self.explicate_assign(var, exp, cont, basic_blocks)
             case ast.Expr(expr):
                 return self.explicate_effect(expr, cont, basic_blocks)
+            case utils.Allocate() | utils.Collect():
+                return [statement, *cont]
             case ast.If(test, body, orelse):
                 compiled_body = self.create_block(
                     self.backlink_instructions(body, cont, basic_blocks),
@@ -623,7 +622,7 @@ class Compiler:
                 )
                 return condition_block
             case _:
-                raise Exception("explicate_control: invalid statement")
+                raise Exception(f"explicate_control: invalid statement {statement}")
 
     def backlink_instructions(
         self,
@@ -636,14 +635,14 @@ class Compiler:
             new_body = self.explicate_stmt(s, new_body, basic_blocks)
         return new_body
 
-    # def explicate_control(self, p: ast.Module):
-    #     match p:
-    #         case ast.Module(body):
-    #             basic_blocks: dict[str, Sequence[ast.stmt]] = {}
-    #             basic_blocks[utils.label_name("start")] = self.backlink_instructions(
-    #                 body, [ast.Return(value=ast.Constant(value=0))], basic_blocks
-    #             )
-    #             return utils.CProgram(basic_blocks)
+    def explicate_control(self, p: ast.Module):
+        match p:
+            case ast.Module(body):
+                basic_blocks: dict[str, Sequence[ast.stmt]] = {}
+                basic_blocks[utils.label_name("start")] = self.backlink_instructions(
+                    body, [ast.Return(value=ast.Constant(value=0))], basic_blocks
+                )
+                return utils.CProgram(basic_blocks)
 
     ### select instructions
 

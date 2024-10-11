@@ -19,6 +19,7 @@ import type_check_Ltup
 from utils import run_tests, run_one_test, enable_tracing
 from interp_x86.eval_x86 import interp_x86
 from interp_Cif import InterpCif
+from interp_Ctup import InterpCtup
 
 
 if len(sys.argv) > 1 and sys.argv[1] == "-v":
@@ -49,7 +50,7 @@ interp_dict = {
     "select_instructions": interp_x86,
     "assign_homes": interp_x86,
     "patch_instructions": interp_x86,
-    "explicate_control": InterpCif().interp,
+    "explicate_control": InterpCtup().interp,
     "expose_allocation": interpreter,
 }
 
@@ -60,6 +61,9 @@ if True:
     # run_tests("if", compiler, "if", typecheck_dict, interp_dict)
     # run_tests("while", compiler, "while", typecheck_dict, interp_dict)
     run_tests("tup", compiler, "tup", typecheck_dict, interp_dict)
+    run_tests("var", compiler, "tup", typecheck_dict, interp_dict)
+    run_tests("if", compiler, "tup", typecheck_dict, interp_dict)
+    run_tests("while", compiler, "tup", typecheck_dict, interp_dict)
 else:
     run_one_test(
         os.getcwd() + "/tests/var/zero.py",

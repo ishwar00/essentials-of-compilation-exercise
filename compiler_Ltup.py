@@ -681,6 +681,15 @@ class Compiler:
                             x86_ast.Callq(utils.label_name("read_int"), 0),
                             x86_ast.Instr("movq", [x86_ast.Reg("rax"), lhs]),
                         ]
+
+                    case ast.Call(ast.Name("len"), [ast.Name() as tup]):
+                        tup = self.select_arg(tup)
+                        return [
+                            x86_ast.Instr("movq", [tup, x86_ast.Reg("r11")]),
+                            x86_ast.Instr("movq", [x86_ast.Deref("r11", 0), lhs]),
+                            x86_ast.Instr("sarq", [x86_ast.Immediate(1), lhs]),
+                            x86_ast.Instr("andq", [x86_ast.Immediate(2**7 - 1), lhs]),
+                        ]
                     case ast.UnaryOp(ast.USub(), atm):
                         return [
                             x86_ast.Instr("movq", [self.select_arg(atm), lhs]),

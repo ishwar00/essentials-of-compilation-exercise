@@ -730,10 +730,55 @@ class Compiler:
                     case ast.Subscript(tup, ast.Constant(index)):
                         tup = self.select_arg(tup)
                         return [
+                            # TODO: test with out of bounds access
                             x86_ast.Instr("movq", [tup, x86_ast.Reg("r11")]),
                             x86_ast.Instr(
                                 "movq", [x86_ast.Deref("r11", 8 * (index + 1)), lhs]
                             ),
+                        ]
+                    case utils.Allocate(length, tuple_type):
+                        assert isinstance(tuple_type, utils.TupleType)
+
+                        tag = 0
+                        # pointer mask.
+                        for element_type in reversed(tuple_type.types):
+                            # ex: [tup, 1, tup]
+                            # 000000
+                            #|000001 - is a pointer
+                            #=000001
+                            #<000010
+                            #|000000 - is not a pointer
+                            #=000010
+                            #<000100
+                            #|000001 - is a pointer
+                            #=000101
+                            #<001010 - final value after loop
+                            tag |= 1 if isinstance(element_type, utils.TupleType) else 0
+                            tag <<= 1
+
+                        # make space for length.
+                        # length is 6 bits. we have already shifted once in the last loop iteration.
+                        tag <<= 5
+                        # TODO: test with length more than 6 bits
+                        tag |= length
+
+                        # forwarding bit
+                        tag <<= 1
+                        tag |= 1
+
+                        return [
+                            x86_ast.Instr(
+                                "movq", [x86_ast.Global("free_ptr"), x86_ast.Reg("r11")]
+                            ),
+                            x86_ast.Instr(
+                                "addq",
+                                [
+                                    x86_ast.Immediate(8 * (length + 1)),
+                                    x86_ast.Global("free_ptr"),
+                                ],
+                            ),
+                            x86_ast.Instr("movq", [x86_ast.Immediate(tag), x86_ast.Reg("r11")]),
+                            x86_ast.Instr("movq", [x86_ast.Reg("r11"), lhs]),
                         ]
                     case _:
                         raise Exception(f"Unsupported expression in assignment: {exp}")

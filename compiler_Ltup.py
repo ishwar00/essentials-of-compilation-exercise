@@ -671,7 +671,7 @@ class Compiler:
                     x86_ast.Instr("movq", [lhs, x86_ast.Reg("rdi")]),
                     x86_ast.Callq(utils.label_name("print_int"), 1),
                 ]
-            case ast.Assign([var], exp):
+            case ast.Assign([ast.Name() as var], exp):
                 lhs = self.select_arg(var)
                 match exp:
                     case ast.Constant(_) | ast.Name(_):
@@ -718,8 +718,23 @@ class Compiler:
                             ),
                             x86_ast.Instr("movzbq", [x86_ast.Reg("al"), lhs]),
                         ]
+                    case ast.Subscript(tup, ast.Constant(index)):
+                        tup = self.select_arg(tup)
+                        return [
+                            x86_ast.Instr("movq", [tup, x86_ast.Reg("r11")]),
+                            x86_ast.Instr(
+                                "movq", [x86_ast.Deref("r11", 8 * (index + 1)), lhs]
+                            ),
+                        ]
                     case _:
                         raise Exception(f"Unsupported expression in assignment: {exp}")
+            case ast.Assign([ast.Subscript(tup, ast.Constant(index))], rhs):
+                tup = self.select_arg(tup)
+                rhs = self.select_arg(rhs)
+                return [
+                    x86_ast.Instr("movq", [tup, x86_ast.Reg("r11")]),
+                    x86_ast.Instr("movq", [rhs, x86_ast.Deref("r11", 8 * (index + 1))]),
+                ]
             case ast.If(cond, body, orelse):
                 assert isinstance(body[0], utils.Goto)
                 assert isinstance(orelse[0], utils.Goto)
@@ -767,15 +782,15 @@ class Compiler:
             case _:
                 raise Exception(f"Unsupported statement type: {s}")
 
-    # def select_instructions(self, p: utils.CProgram) -> x86_ast.X86Program:
-    #     x86_blocks: dict[str, list[x86_ast.instr]] = {}
-    #
-    #     for label, stmts in p.body.items():
-    #         x86_blocks[label] = [
-    #             instr for stmt in stmts for instr in self.select_stmt(stmt)
-    #         ]
-    #
-    #     return x86_ast.X86Program(x86_blocks)
+    def select_instructions(self, p: utils.CProgram) -> x86_ast.X86Program:
+        x86_blocks: dict[str, list[x86_ast.instr]] = {}
+
+        for label, stmts in p.body.items():
+            x86_blocks[label] = [
+                instr for stmt in stmts for instr in self.select_stmt(stmt)
+            ]
+
+        return x86_ast.X86Program(x86_blocks)
 
     def remove_jumps(self, p: x86_ast.X86Program) -> x86_ast.X86Program:
         jump_sources: dict[str, list[str]] = defaultdict(list)

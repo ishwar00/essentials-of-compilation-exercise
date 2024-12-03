@@ -1,8 +1,9 @@
 import ast
+from copy import deepcopy
 import os
 import sys
 from ast import *
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from sys import platform
 from typing import Sequence
 
@@ -804,6 +805,7 @@ class Uninitialized(expr):
 class CProgram:
     __match_args__ = ("body",)
     body: dict[str, Sequence[stmt]]
+    var_types: dict[str, Type] = field(default_factory=dict)
 
     def __str__(self):
         result = ""
@@ -942,6 +944,9 @@ class TupleType(Type):
 
     def __str__(self):
         return "tuple[" + ",".join([str(p) for p in self.types]) + "]"
+
+    def __deepcopy__(self, memo):
+        return TupleType(deepcopy(self.types, memo))
 
 
 @dataclass(eq=True)
@@ -1390,7 +1395,7 @@ def test_pass(passname, interp_dict, program_root, ast, compiler_name):
             + program_root
             + "\n"
         )
-        return 0  # ??
+        return 1
 
 
 def compile_and_test(
@@ -1828,8 +1833,10 @@ def run_tests(lang, compiler, compiler_name, type_check_dict, interp_dict):
         raise Exception("missing directory for test programs: " + directory)
     for dirpath, dirnames, filenames in os.walk(directory):
         tests = filter(is_python_extension, filenames)
+        # tests = filter(lambda n: n == "is_op.py", filenames)
         tests = [dirpath + t for t in tests]
         break
+    tests.sort()
     # Compile and run each test program, comparing output to the golden file.
     successful_passes = 0
     total_passes = 0

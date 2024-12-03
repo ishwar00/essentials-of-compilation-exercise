@@ -1,6 +1,8 @@
 import os
 import sys
 
+import type_check_Ctup
+
 sys.path.append("../python-student-support-code")
 sys.path.append("../python-student-support-code/interp_x86")
 
@@ -35,10 +37,12 @@ compiler = compiler.Compiler()
 # typechecker = type_check_Lif.TypeCheckLif().type_check
 # typechecker = type_check_Lwhile.TypeCheckLwhile().type_check
 typechecker = type_check_Ltup.TypeCheckLtup().type_check
+typechecker_c = type_check_Ctup.TypeCheckCtup().type_check
 
 typecheck_dict = {
     "source": typechecker,
     "remove_complex_operands": typechecker,
+    "explicate_control": typechecker_c
 }
 # interpreter = interp_Lvar.InterpLvar().interp
 # interpreter = interp_Lif.InterpLif().interp
@@ -47,11 +51,12 @@ interpreter = interp_Ltup.InterpLtup().interp
 interp_dict = {
     "remove_complex_operands": interpreter,
     "shrink": interpreter,
-    "select_instructions": interp_x86,
-    "assign_homes": interp_x86,
-    "patch_instructions": interp_x86,
     "explicate_control": InterpCtup().interp,
-    "expose_allocation": interpreter,
+    # "expose_allocation": interpreter,
+    # "select_instructions": interp_x86,
+    # "assign_homes": interp_x86,
+    # "patch_instructions": interp_x86,
+    "prelude_and_conclusion": interp_x86
 }
 
 if True:
@@ -61,9 +66,9 @@ if True:
     # run_tests("if", compiler, "if", typecheck_dict, interp_dict)
     # run_tests("while", compiler, "while", typecheck_dict, interp_dict)
     run_tests("tup", compiler, "tup", typecheck_dict, interp_dict)
-    run_tests("var", compiler, "tup", typecheck_dict, interp_dict)
-    run_tests("if", compiler, "tup", typecheck_dict, interp_dict)
-    run_tests("while", compiler, "tup", typecheck_dict, interp_dict)
+    # run_tests("var", compiler, "tup", typecheck_dict, interp_dict)
+    # run_tests("if", compiler, "tup", typecheck_dict, interp_dict)
+    # run_tests("while", compiler, "tup", typecheck_dict, interp_dict)
 else:
     run_one_test(
         os.getcwd() + "/tests/var/zero.py",

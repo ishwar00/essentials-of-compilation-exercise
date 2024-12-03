@@ -3,7 +3,8 @@ import itertools
 from collections import defaultdict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol, TypeGuard
+from pprint import pformat
+from typing import Protocol, TypeGuard
 
 import utils
 import x86_ast
@@ -49,7 +50,7 @@ def _condition_code(op: ast.cmpop) -> str:
             return "ge"
         case ast.NotEq():
             return "ne"
-        case ast.Eq():
+        case ast.Eq() | ast.Is():
             return "e"
         case _:
             raise Exception(f"_condition_code: unexpected op: {op}. type: {type(op)}")
@@ -86,6 +87,8 @@ def global_value_of(name: str) -> ast.Call:
 
 
 class Compiler:
+    # TODO: duplicate code after if-else. see `tup/dumb-example`, `explicate_control` step
+
     def expose_tuple_allocation(self, tup: ast.Tuple) -> ast.expr:
         init_vars = [ast.Name(utils.generate_name("init")) for _ in tup.elts]
         eval_elements = [
@@ -661,17 +664,27 @@ class Compiler:
                 return x86_ast.Immediate(c)
             case ast.Name(v):
                 return x86_ast.Variable(v)
-        raise Exception()
+            case utils.GlobalValue():
+                return x86_ast.Global(e.name)
+        raise Exception(f"select_arg: unexpected expr: {e}")
 
     def select_stmt(self, s: ast.stmt) -> Sequence[x86_ast.instr]:
         match s:
             case ast.Expr(ast.Call(ast.Name("print"), [atm])):
-                lhs = self.select_arg(atm)
+                arg = self.select_arg(atm)
                 return [
-                    x86_ast.Instr("movq", [lhs, x86_ast.Reg("rdi")]),
+                    x86_ast.Instr("movq", [arg, x86_ast.Reg("rdi")]),
                     x86_ast.Callq(utils.label_name("print_int"), 1),
                 ]
-            case ast.Assign([var], exp):
+            case utils.Collect(size):
+                return [
+                    x86_ast.Instr("movq", [x86_ast.Reg("r15"), x86_ast.Reg("rdi")]),
+                    x86_ast.Instr(
+                        "movq", [x86_ast.Immediate(size), x86_ast.Reg("rsi")]
+                    ),
+                    x86_ast.Callq(utils.label_name("collect"), 2),
+                ]
+            case ast.Assign([ast.Name() as var], exp):
                 lhs = self.select_arg(var)
                 match exp:
                     case ast.Constant(_) | ast.Name(_):
@@ -680,6 +693,15 @@ class Compiler:
                         return [
                             x86_ast.Callq(utils.label_name("read_int"), 0),
                             x86_ast.Instr("movq", [x86_ast.Reg("rax"), lhs]),
+                        ]
+
+                    case ast.Call(ast.Name("len"), [ast.Name() as tup]):
+                        tup = self.select_arg(tup)
+                        return [
+                            x86_ast.Instr("movq", [tup, x86_ast.Reg("r11")]),
+                            x86_ast.Instr("movq", [x86_ast.Deref("r11", 0), lhs]),
+                            x86_ast.Instr("sarq", [x86_ast.Immediate(1), lhs]),
+                            x86_ast.Instr("andq", [x86_ast.Immediate(2**7 - 1), lhs]),
                         ]
                     case ast.UnaryOp(ast.USub(), atm):
                         return [
@@ -708,6 +730,14 @@ class Compiler:
                                     x86_ast.Instr("movq", [atm, lhs]),
                                     x86_ast.Instr("xorq", [x86_ast.Immediate(1), lhs]),
                                 ]
+                    case ast.Compare(atm1, [ast.Is()], [atm2]):
+                        atm1 = self.select_arg(atm1)
+                        atm2 = self.select_arg(atm2)
+                        return [
+                            x86_ast.Instr("cmpq", [atm2, atm1]),
+                            x86_ast.Instr("sete", [x86_ast.Reg("al")]),
+                            x86_ast.Instr("movzbq", [x86_ast.Reg("al"), lhs]),
+                        ]
                     case ast.Compare(atm1, [op], [atm2]):
                         atm1 = self.select_arg(atm1)
                         atm2 = self.select_arg(atm2)
@@ -718,8 +748,71 @@ class Compiler:
                             ),
                             x86_ast.Instr("movzbq", [x86_ast.Reg("al"), lhs]),
                         ]
+                    case ast.Subscript(tup, ast.Constant(index)):
+                        tup = self.select_arg(tup)
+                        return [
+                            # TODO: test with out of bounds access
+                            x86_ast.Instr("movq", [tup, x86_ast.Reg("r11")]),
+                            x86_ast.Instr(
+                                "movq", [x86_ast.Deref("r11", 8 * (index + 1)), lhs]
+                            ),
+                        ]
+                    case utils.Allocate(length, tuple_type):
+                        assert isinstance(tuple_type, utils.TupleType)
+
+                        tag = 0
+                        # pointer mask.
+                        for element_type in reversed(tuple_type.types):
+                            # ex: [tup, 1, tup]
+                            # 000000
+                            # |000001 - is a pointer
+                            # =000001
+                            # <000010
+                            # |000000 - is not a pointer
+                            # =000010
+                            # <000100
+                            # |000001 - is a pointer
+                            # =000101
+                            # <001010 - final value after loop
+                            tag |= 1 if isinstance(element_type, utils.TupleType) else 0
+                            tag <<= 1
+
+                        # make space for length.
+                        # length is 6 bits. we have already shifted once in the last loop iteration.
+                        tag <<= 5
+                        # TODO: test with length more than 6 bits
+                        tag |= length
+
+                        # forwarding bit
+                        tag <<= 1
+                        tag |= 1
+
+                        return [
+                            x86_ast.Instr(
+                                "movq", [x86_ast.Global("free_ptr"), x86_ast.Reg("r11")]
+                            ),
+                            x86_ast.Instr(
+                                "addq",
+                                [
+                                    x86_ast.Immediate(8 * (length + 1)),
+                                    x86_ast.Global("free_ptr"),
+                                ],
+                            ),
+                            x86_ast.Instr(
+                                "movq",
+                                [x86_ast.Immediate(tag), x86_ast.Deref("r11", 0)],
+                            ),
+                            x86_ast.Instr("movq", [x86_ast.Reg("r11"), lhs]),
+                        ]
                     case _:
                         raise Exception(f"Unsupported expression in assignment: {exp}")
+            case ast.Assign([ast.Subscript(tup, ast.Constant(index))], rhs):
+                tup = self.select_arg(tup)
+                rhs = self.select_arg(rhs)
+                return [
+                    x86_ast.Instr("movq", [tup, x86_ast.Reg("r11")]),
+                    x86_ast.Instr("movq", [rhs, x86_ast.Deref("r11", 8 * (index + 1))]),
+                ]
             case ast.If(cond, body, orelse):
                 assert isinstance(body[0], utils.Goto)
                 assert isinstance(orelse[0], utils.Goto)
@@ -767,15 +860,15 @@ class Compiler:
             case _:
                 raise Exception(f"Unsupported statement type: {s}")
 
-    # def select_instructions(self, p: utils.CProgram) -> x86_ast.X86Program:
-    #     x86_blocks: dict[str, list[x86_ast.instr]] = {}
-    #
-    #     for label, stmts in p.body.items():
-    #         x86_blocks[label] = [
-    #             instr for stmt in stmts for instr in self.select_stmt(stmt)
-    #         ]
-    #
-    #     return x86_ast.X86Program(x86_blocks)
+    def select_instructions(self, p: utils.CProgram) -> x86_ast.X86Program:
+        x86_blocks: dict[str, list[x86_ast.instr]] = {}
+
+        for label, stmts in p.body.items():
+            x86_blocks[label] = [
+                instr for stmt in stmts for instr in self.select_stmt(stmt)
+            ]
+
+        return x86_ast.X86Program(x86_blocks, var_types=p.var_types)
 
     def remove_jumps(self, p: x86_ast.X86Program) -> x86_ast.X86Program:
         jump_sources: dict[str, list[str]] = defaultdict(list)
@@ -957,6 +1050,22 @@ class Compiler:
                 return x86_ast.Reg("rdx")
         return loc
 
+    def _ensure_tuples_interfere_with_all_regs(
+        self,
+        p: x86_ast.X86Program,
+        graph: UndirectedAdjList,
+        live_after_set: set[x86_ast.location],
+        instr: x86_ast.instr,
+    ):
+        match instr:
+            case x86_ast.Callq(label, 2) if utils.label_name("collect") == label:
+                for live_location in live_after_set:
+                    if isinstance(live_location, x86_ast.Variable) and isinstance(
+                        p.var_types[live_location.id], utils.TupleType
+                    ):
+                        for callee_saved_register in _callee_saved_registers:
+                            graph.add_edge(live_location, callee_saved_register)
+
     def build_interference(
         self,
         p: x86_ast.X86Program,
@@ -971,7 +1080,9 @@ class Compiler:
                 live_after_set = live_after[label][instr]
 
                 match instr:
-                    case x86_ast.Instr("movq" | "movzbq", [s, d]):
+                    case x86_ast.Instr("movq" | "movzbq", [s, d]) if not isinstance(
+                        d, x86_ast.Deref
+                    ):
                         assert isinstance(
                             d, x86_ast.location
                         ), f"{d} needs to be a location"
@@ -988,6 +1099,10 @@ class Compiler:
                                 live_location = self._handle_byte_reg(live_location)
                                 if write_location != live_location:
                                     graph.add_edge(write_location, live_location)
+
+                        self._ensure_tuples_interfere_with_all_regs(
+                            p, graph, live_after_set, instr
+                        )
 
         return graph
 
@@ -1080,8 +1195,11 @@ class Compiler:
         return reg_allocation
 
     def allocate_registers(
-        self, interference_graph: UndirectedAdjList, move_graph: UndirectedAdjList
-    ) -> tuple[dict[x86_ast.Variable, x86_ast.Deref | x86_ast.Reg], int]:
+        self,
+        p: x86_ast.X86Program,
+        interference_graph: UndirectedAdjList,
+        move_graph: UndirectedAdjList,
+    ) -> tuple[dict[x86_ast.Variable, x86_ast.Deref | x86_ast.Reg], int, int]:
         variables: set[x86_ast.Variable] = {
             vertex
             for vertex in interference_graph.vertices()
@@ -1091,15 +1209,23 @@ class Compiler:
 
         reg_allocation: dict[x86_ast.Variable, x86_ast.Deref | x86_ast.Reg] = {}
         spilled_count: int = 0
+        root_stack_spilled_count: int = 0
         for loc, color in color_allocation.items():
             if color in _color_to_register:
                 reg_allocation[loc] = _color_to_register[color]
+            elif p.var_types[loc.id] == utils.TupleType:
+                root_stack_spilled_count += 1
+                reg_allocation[loc] = x86_ast.Deref(
+                    # NOTE: not sure if this is correct
+                    "r15",
+                    -8 * root_stack_spilled_count,
+                )
             else:
                 offset = color - len(_color_to_register)
                 reg_allocation[loc] = x86_ast.Deref("rbp", -8 * offset)
                 spilled_count = max(offset, spilled_count)
 
-        return reg_allocation, spilled_count
+        return reg_allocation, spilled_count, root_stack_spilled_count
 
     def build_move_graph(self, p: x86_ast.X86Program) -> UndirectedAdjList:
         graph = UndirectedAdjList()
@@ -1148,32 +1274,38 @@ class Compiler:
             case _:
                 raise Exception(f"invalid instruction: {i}")
 
-    # def assign_homes(self, p: x86_ast.X86Program) -> x86_ast.X86Program:
-    #     live_after_set = self.uncover_live(p)
-    #     graph = self.build_interference(p, live_after_set)
-    #     move_graph = self.build_move_graph(p)
-    #     reg_allocation, spilled_count = self.allocate_registers(graph, move_graph)
-    #
-    #     assert isinstance(p.body, dict)
-    #
-    #     def _transform_instr(instr: x86_ast.instr) -> x86_ast.instr:
-    #         match instr:
-    #             case x86_ast.Instr():
-    #                 return self.assign_homes_instr(instr, reg_allocation)
-    #             case _:
-    #                 return instr
-    #
-    #     new_body = {
-    #         label: [_transform_instr(instr) for instr in block]
-    #         for label, block in p.body.items()
-    #     }
-    #
-    #     used_locations = set(reg_allocation.values())
-    #     used_callee = _callee_saved_registers & used_locations
-    #
-    #     return x86_ast.X86Program(
-    #         body=new_body, spilled_count=spilled_count, used_callee=used_callee
-    #     )
+    def assign_homes(self, p: x86_ast.X86Program) -> x86_ast.X86Program:
+        live_after_set = self.uncover_live(p)
+        utils.trace(pformat(live_after_set))
+        graph = self.build_interference(p, live_after_set)
+        move_graph = self.build_move_graph(p)
+        reg_allocation, spilled_count, root_stack_spilled_count = (
+            self.allocate_registers(p, graph, move_graph)
+        )
+
+        assert isinstance(p.body, dict)
+
+        def _transform_instr(instr: x86_ast.instr) -> x86_ast.instr:
+            match instr:
+                case x86_ast.Instr():
+                    return self.assign_homes_instr(instr, reg_allocation)
+                case _:
+                    return instr
+
+        new_body = {
+            label: [_transform_instr(instr) for instr in block]
+            for label, block in p.body.items()
+        }
+
+        used_locations = set(reg_allocation.values())
+        used_callee = _callee_saved_registers & used_locations
+
+        return x86_ast.X86Program(
+            body=new_body,
+            spilled_count=spilled_count,
+            used_callee=used_callee,
+            root_stack_spilled_count=root_stack_spilled_count,
+        )
 
     def patch_instr(self, i: x86_ast.instr) -> list[x86_ast.instr]:
         match i:
@@ -1202,7 +1334,8 @@ class Compiler:
                 ]
 
             case x86_ast.Instr(
-                instr,
+                "movq"
+                | "movzbq",
                 [arg_0, arg_1],
             ) if arg_0 == arg_1:
                 return []
@@ -1222,61 +1355,100 @@ class Compiler:
             case _:
                 return [i]
 
-    # def patch_instructions(self, p: x86_ast.X86Program) -> x86_ast.X86Program:
-    #     assert isinstance(p.body, dict)
-    #
-    #     def _transform_instr(instr: x86_ast.instr) -> list[x86_ast.instr]:
-    #         match instr:
-    #             case x86_ast.Instr(_, [_, _]):
-    #                 return self.patch_instr(instr)
-    #             case _:
-    #                 return [instr]
-    #
-    #     new_body = {
-    #         label: [i for instr in block for i in _transform_instr(instr)]
-    #         for label, block in p.body.items()
-    #     }
-    #
-    #     p.body = new_body
-    #     return p
+    def patch_instructions(self, p: x86_ast.X86Program) -> x86_ast.X86Program:
+        assert isinstance(p.body, dict)
+
+        def _transform_instr(instr: x86_ast.instr) -> list[x86_ast.instr]:
+            match instr:
+                case x86_ast.Instr(_, [_, _]):
+                    return self.patch_instr(instr)
+                case _:
+                    return [instr]
+
+        new_body = {
+            label: [i for instr in block for i in _transform_instr(instr)]
+            for label, block in p.body.items()
+        }
+
+        p.body = new_body
+        return p
 
     ###########################################################################
     # Prelude & Conclusion
     ###########################################################################
 
-    # def prelude_and_conclusion(self, p: x86_ast.X86Program) -> x86_ast.X86Program:
-    #     assert p.spilled_count is not None
-    #     assert p.used_callee is not None
-    #     assert isinstance(p.body, dict)
-    #
-    #     # we consider the total stack locations used for alignment
-    #     # (including callee saved registers pushed on the stack)
-    #     total_used = p.spilled_count + len(p.used_callee)
-    #     # align frame size to 16 bytes
-    #     frame_size = (total_used if total_used % 2 == 0 else total_used + 1) - len(
-    #         # subtract callee saved registers after alignment
-    #         p.used_callee
-    #     )
-    #
-    #     p.body[utils.label_name("main")] = [
-    #         x86_ast.Instr("pushq", [x86_ast.Reg("rbp")]),
-    #         x86_ast.Instr("movq", [x86_ast.Reg("rsp"), x86_ast.Reg("rbp")]),
-    #         x86_ast.Instr(
-    #             "subq", [x86_ast.Immediate(frame_size * 8), x86_ast.Reg("rsp")]
-    #         ),
-    #         *(x86_ast.Instr("pushq", [r]) for r in p.used_callee),
-    #         x86_ast.Jump(utils.label_name("start")),
-    #     ]
-    #
-    #     p.body[utils.label_name("conclusion")] = [
-    #         *(x86_ast.Instr("popq", [r]) for r in p.used_callee),
-    #         x86_ast.Instr(
-    #             "addq", [x86_ast.Immediate(frame_size * 8), x86_ast.Reg("rsp")]
-    #         ),
-    #         x86_ast.Instr("popq", [x86_ast.Reg("rbp")]),
-    #         x86_ast.Instr("retq", []),
-    #     ]
-    #
-    #     p = self.remove_jumps(p)
-    #
-    #     return p
+    def prelude_and_conclusion(self, p: x86_ast.X86Program) -> x86_ast.X86Program:
+        assert p.spilled_count is not None
+        assert p.root_stack_spilled_count is not None
+        assert p.used_callee is not None
+        assert isinstance(p.body, dict)
+
+        # we consider the total stack locations used for alignment
+        # (including callee saved registers pushed on the stack)
+        total_used = p.spilled_count + len(p.used_callee)
+        # align spilled count to 16 bytes
+        aligned_spill_count = (
+            total_used if total_used % 2 == 0 else total_used + 1
+        ) - len(
+            # subtract callee saved registers after alignment
+            p.used_callee
+        )
+
+        rootstack_size = 64 * 1024  # 64kB
+        initial_heap_size = 16
+
+        p.body[utils.label_name("main")] = [
+            # initialize rsp
+            x86_ast.Instr("pushq", [x86_ast.Reg("rbp")]),
+            x86_ast.Instr("movq", [x86_ast.Reg("rsp"), x86_ast.Reg("rbp")]),
+            # allocate spilled locals
+            x86_ast.Instr(
+                "subq", [x86_ast.Immediate(aligned_spill_count * 8), x86_ast.Reg("rsp")]
+            ),
+            # save callee-saved regs
+            *(x86_ast.Instr("pushq", [r]) for r in p.used_callee),
+            # movq $65536, %rdi
+            # movq $16, %rsi
+            # callq initialize
+            # movq rootstack_begin(%rip), %r15
+            # movq $0, 0(%r15)
+            # addq $8, %r15
+            x86_ast.Instr(
+                "movq", [x86_ast.Immediate(rootstack_size), x86_ast.Reg("rdi")]
+            ),
+            x86_ast.Instr(
+                "movq", [x86_ast.Immediate(initial_heap_size), x86_ast.Reg("rsi")]
+            ),
+            x86_ast.Callq(utils.label_name("initialize"), 2),
+            x86_ast.Instr(
+                "movq", [x86_ast.Global("rootstack_begin"), x86_ast.Reg("r15")]
+            ),
+            *(
+                x86_ast.Instr(
+                    "movq", [x86_ast.Immediate(0), x86_ast.Deref("r15", i * 8)]
+                )
+                for i in range(p.root_stack_spilled_count)
+            ),
+            x86_ast.Instr(
+                "addq",
+                [x86_ast.Immediate(p.root_stack_spilled_count * 8), x86_ast.Reg("r15")],
+            ),
+            x86_ast.Jump(utils.label_name("start")),
+        ]
+
+        p.body[utils.label_name("conclusion")] = [
+            x86_ast.Instr(
+                "subq",
+                [x86_ast.Immediate(p.root_stack_spilled_count * 8), x86_ast.Reg("r15")],
+            ),
+            *(x86_ast.Instr("popq", [r]) for r in p.used_callee),
+            x86_ast.Instr(
+                "addq", [x86_ast.Immediate(aligned_spill_count * 8), x86_ast.Reg("rsp")]
+            ),
+            x86_ast.Instr("popq", [x86_ast.Reg("rbp")]),
+            x86_ast.Instr("retq", []),
+        ]
+
+        p = self.remove_jumps(p)
+
+        return p

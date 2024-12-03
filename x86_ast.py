@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 import ast
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Iterable
 
-from utils import dedent, indent, indent_stmt, label_name
+from utils import Type, dedent, indent, indent_stmt, label_name
 
 
 @dataclass
 class X86Program:
     body: dict[str, list[instr]] | list[instr]
     spilled_count: int | None = None
+    root_stack_spilled_count: int | None = None
     used_callee: set[Reg] | None = None
+    var_types: dict[str, Type] = field(default_factory=dict)
 
     def __str__(self):
         result = ''

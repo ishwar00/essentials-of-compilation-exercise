@@ -1,4 +1,5 @@
-FROM --platform=linux/amd64 gcc:13-bookworm
-RUN apt-get update && apt-get install -y python3-pip python3-graphviz graphviz
+FROM --platform=linux/amd64 python:3.12-bookworm
+RUN apt-get update && apt-get install -y gcc graphviz
+RUN pip install graphviz
 WORKDIR /eoc
 ENTRYPOINT [ "/bin/bash" ]

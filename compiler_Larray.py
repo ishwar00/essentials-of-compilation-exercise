@@ -89,6 +89,85 @@ def global_value_of(name: str) -> ast.Call:
 class Compiler:
     # TODO: duplicate code after if-else. see `tup/dumb-example`, `explicate_control` step
 
+    def resolve_expr(self, expr: ast.expr) -> ast.expr:
+        match expr:
+            case ast.Tuple(elts, ctx):
+                return ast.Tuple([self.resolve_expr(elt) for elt in elts], ctx)
+            case ast.UnaryOp(op, condition):
+                return ast.UnaryOp(op, self.resolve_expr(condition))
+            case ast.BinOp(left, op, right):
+                return ast.BinOp(
+                    self.resolve_expr(left),
+                    op,
+                    self.resolve_expr(right),
+                )
+            case ast.Compare(left, [op], [right]):
+                return ast.Compare(
+                    self.resolve_expr(left),
+                    [op],
+                    [self.resolve_expr(right)],
+                )
+            case ast.IfExp(condition, body, orelse):
+                return ast.IfExp(
+                    self.resolve_expr(condition),
+                    self.resolve_expr(body),
+                    self.resolve_expr(orelse),
+                )
+            case ast.Subscript(value, index, ctx):
+                typed_value = value
+                assert is_custom_typed(typed_value)
+
+                match typed_value.has_type:
+                    case utils.TupleType():
+                        return ast.Subscript(
+                            self.resolve_expr(value),
+                            self.resolve_expr(index),
+                            ctx,
+                        )
+                    case utils.ListType():
+                        return utils.Call(
+                            ast.Name("array_load"), [value, index], keywords=[]
+                        )
+                    case _:
+                        raise Exception(
+                            f"Unknown type for Subscript: {typed_value.has_type}"
+                        )
+            case ast.Call(ast.Name("len"), [exp]):
+                typed_exp = exp
+                assert is_custom_typed(typed_exp)
+
+                match typed_exp.has_type:
+                    case utils.TupleType():
+                        return ast.Call(ast.Name("len"), [self.resolve_expr(exp)], [])
+                    case utils.ListType():
+                        return utils.Call(ast.Name("array_len"), [exp], keywords=[])
+                    case _:
+                        raise Exception(f"Unknown type for len: {typed_exp.has_type}")
+            case ast.Call(ast.Name("print"), [exp]):
+                return ast.Call(ast.Name("print"), [self.resolve_expr(exp)], [])
+            case (
+                ast.Constant()
+                | ast.Name()
+                | utils.GlobalValue()
+                | ast.Call(ast.Name("input_int"), [])
+                | utils.Allocate()
+            ):
+                return expr
+            case _:
+                raise Exception(f"Unknown expr for expose_allocation: {expr}")
+
+    def resolve_stmt(self, stmt: ast.stmt) -> ast.stmt: ...
+
+    def resolve(self, p: ast.Module) -> ast.Module:
+        body = p.body
+        new_body: list[ast.stmt] = []
+
+        for stmt in body:
+            ...
+
+        p.body = new_body
+        return p
+
     def expose_tuple_allocation(self, tup: ast.Tuple) -> ast.expr:
         init_vars = [ast.Name(utils.generate_name("init")) for _ in tup.elts]
         eval_elements = [
